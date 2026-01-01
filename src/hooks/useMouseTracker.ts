@@ -3,6 +3,11 @@ import { useVideoStore } from '../stores/trackingStore';
 import { useTrackingStore } from '../stores/trackingSlice';
 import type { TrackingResult } from '../types';
 
+// Processing optimization constants
+const PROCESSING_WIDTH = 480; // Target width (93.75% reduction from 1920px)
+const PROGRESS_THROTTLE_MS = 200; // Update progress at 5 Hz
+const LOG_THROTTLE_MS = 500; // Log at 2 Hz
+
 interface UseMouseTrackerProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -30,67 +35,69 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
   const backgroundImageDataRef = useRef<ImageData | null>(null);
   const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // NEW: Optimization refs
+  const backgroundGrayscaleRef = useRef<Uint8Array | null>(null);
+  const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scaleFactorsRef = useRef<{ scaleX: number; scaleY: number } | null>(null);
+  const lastProgressUpdateRef = useRef<number>(0);
+  const lastLogTimeRef = useRef<number>(0);
+
   /**
    * Initialize temporary canvas for processing
    */
   useEffect(() => {
+    console.log('[Mouse Tracker] Init effect:', {
+      method: trackingConfig.method,
+      hasMetadata: !!metadata,
+      hasTempCanvas: !!tempCanvasRef.current,
+      hasProcessingCanvas: !!processingCanvasRef.current
+    });
+
     if (trackingConfig.method !== 'mouse-tracker') {
+      console.log('[Mouse Tracker] Wrong method, skipping init');
+      setIsReady(false);
       return;
     }
 
-    if (!tempCanvasRef.current && metadata) {
-      const canvas = document.createElement('canvas');
-      canvas.width = metadata.width;
-      canvas.height = metadata.height;
-      tempCanvasRef.current = canvas;
+    if (!metadata) {
+      console.log('[Mouse Tracker] No metadata yet');
+      setIsReady(false);
+      return;
+    }
+
+    // Only initialize if both canvases are null
+    if (!tempCanvasRef.current || !processingCanvasRef.current) {
+      console.log('[Mouse Tracker] Initializing canvases...');
+
+      // Full-resolution canvas (for drawing video only)
+      const fullResCanvas = document.createElement('canvas');
+      fullResCanvas.width = metadata.width;
+      fullResCanvas.height = metadata.height;
+      tempCanvasRef.current = fullResCanvas;
+
+      // Downscaled processing canvas (for pixel operations)
+      const aspectRatio = metadata.height / metadata.width;
+      const processingHeight = Math.round(PROCESSING_WIDTH * aspectRatio);
+
+      const processingCanvas = document.createElement('canvas');
+      processingCanvas.width = PROCESSING_WIDTH;
+      processingCanvas.height = processingHeight;
+      processingCanvasRef.current = processingCanvas;
+
+      // Precompute scale factors for coordinate remapping
+      scaleFactorsRef.current = {
+        scaleX: metadata.width / PROCESSING_WIDTH,
+        scaleY: metadata.height / processingHeight,
+      };
+
+      console.log(`[Mouse Tracker] Canvases initialized: ${PROCESSING_WIDTH}×${processingHeight} (scale: ${scaleFactorsRef.current.scaleX.toFixed(2)}×)`);
+
+      setIsReady(true);
+    } else {
+      console.log('[Mouse Tracker] Canvases already exist, setting ready');
       setIsReady(true);
     }
   }, [trackingConfig.method, metadata]);
-
-  /**
-   * Capture reference background frame (empty cage)
-   */
-  const captureBackground = useCallback(() => {
-    const video = videoRef.current;
-    const tempCanvas = tempCanvasRef.current;
-
-    if (!video || !tempCanvas) {
-      console.error('[Mouse Tracker] Video or canvas not ready');
-      return;
-    }
-
-    const ctx = tempCanvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
-
-    // Draw current frame to temp canvas
-    ctx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-
-    // Get image data
-    backgroundImageDataRef.current = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-
-    // Create preview thumbnail
-    const previewCanvas = document.createElement('canvas');
-    previewCanvas.width = 160;
-    previewCanvas.height = 120;
-    const previewCtx = previewCanvas.getContext('2d');
-    if (previewCtx) {
-      previewCtx.drawImage(tempCanvas, 0, 0, 160, 120);
-      setBackgroundPreview(previewCanvas.toDataURL());
-    }
-
-    setHasBackground(true);
-    console.log('[Mouse Tracker] Background captured');
-  }, [videoRef]);
-
-  /**
-   * Clear background reference
-   */
-  const clearBackground = useCallback(() => {
-    backgroundImageDataRef.current = null;
-    setHasBackground(false);
-    setBackgroundPreview(null);
-    console.log('[Mouse Tracker] Background cleared');
-  }, []);
 
   /**
    * Convert RGB to grayscale (Y = 0.299*R + 0.587*G + 0.114*B)
@@ -108,6 +115,90 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
     }
 
     return gray;
+  }, []);
+
+  /**
+   * Capture reference background frame (empty cage)
+   */
+  const captureBackground = useCallback(() => {
+    console.log('[Mouse Tracker] captureBackground called');
+    const video = videoRef.current;
+    const tempCanvas = tempCanvasRef.current;
+    const processingCanvas = processingCanvasRef.current;
+
+    console.log('[Mouse Tracker] Refs:', {
+      video: !!video,
+      videoDetails: video ? {
+        readyState: video.readyState,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+        paused: video.paused,
+        currentTime: video.currentTime
+      } : 'null',
+      tempCanvas: !!tempCanvas,
+      tempCanvasDetails: tempCanvas ? { width: tempCanvas.width, height: tempCanvas.height } : 'null',
+      processingCanvas: !!processingCanvas,
+      processingCanvasDetails: processingCanvas ? { width: processingCanvas.width, height: processingCanvas.height } : 'null'
+    });
+
+    if (!video) {
+      console.error('[Mouse Tracker] Video element is null - videoRef.current is not set');
+      return;
+    }
+
+    if (!tempCanvas || !processingCanvas) {
+      console.error('[Mouse Tracker] Canvas not ready - tempCanvas:', !!tempCanvas, 'processingCanvas:', !!processingCanvas);
+      return;
+    }
+
+    // Step 1: Draw full-res frame (for preview only)
+    const fullResCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+    if (!fullResCtx) return;
+    fullResCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+
+    // Step 2: Draw DOWNSCALED version to processing canvas
+    const processingCtx = processingCanvas.getContext('2d', { willReadFrequently: true });
+    if (!processingCtx) return;
+    processingCtx.drawImage(
+      video,
+      0, 0, tempCanvas.width, tempCanvas.height,  // Source
+      0, 0, processingCanvas.width, processingCanvas.height  // Dest
+    );
+
+    // Step 3: Get downscaled image data
+    const downscaledImageData = processingCtx.getImageData(
+      0, 0,
+      processingCanvas.width,
+      processingCanvas.height
+    );
+
+    // Step 4: Convert to grayscale ONCE and cache
+    backgroundGrayscaleRef.current = toGrayscale(downscaledImageData.data);
+    backgroundImageDataRef.current = downscaledImageData;
+
+    // Create preview thumbnail (unchanged)
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.width = 160;
+    previewCanvas.height = 120;
+    const previewCtx = previewCanvas.getContext('2d');
+    if (previewCtx) {
+      previewCtx.drawImage(tempCanvas, 0, 0, 160, 120);
+      setBackgroundPreview(previewCanvas.toDataURL());
+    }
+
+    setHasBackground(true);
+    console.log(`[Mouse Tracker] Background captured at ${processingCanvas.width}×${processingCanvas.height}`);
+  }, [videoRef, toGrayscale]);
+
+  /**
+   * Clear background reference
+   */
+  const clearBackground = useCallback(() => {
+    backgroundImageDataRef.current = null;
+    backgroundGrayscaleRef.current = null; // NEW: Clear cached grayscale
+    setHasBackground(false);
+    setBackgroundPreview(null);
+    console.log('[Mouse Tracker] Background cleared');
   }, []);
 
   /**
@@ -179,25 +270,30 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
   const processFrame = useCallback(
     (timestamp: number, frameNumber: number): TrackingResult | null => {
       const video = videoRef.current;
-      const tempCanvas = tempCanvasRef.current;
-      const backgroundData = backgroundImageDataRef.current;
+      const processingCanvas = processingCanvasRef.current;
+      const backgroundGray = backgroundGrayscaleRef.current; // Use cached
+      const scaleFactors = scaleFactorsRef.current;
 
-      if (!video || !tempCanvas || !backgroundData) {
+      if (!video || !processingCanvas || !backgroundGray || !scaleFactors) {
         return null;
       }
 
-      const ctx = tempCanvas.getContext('2d', { willReadFrequently: true });
+      const ctx = processingCanvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return null;
 
-      const { width, height } = tempCanvas;
+      const { width, height } = processingCanvas; // Downscaled dimensions
 
-      // Draw current frame
-      ctx.drawImage(video, 0, 0, width, height);
+      // Draw current frame to DOWNSCALED canvas
+      ctx.drawImage(
+        video,
+        0, 0, video.videoWidth, video.videoHeight,
+        0, 0, width, height
+      );
+
       const currentData = ctx.getImageData(0, 0, width, height);
 
-      // Convert both frames to grayscale (4x speedup)
+      // Convert ONLY current frame (background already cached)
       const currentGray = toGrayscale(currentData.data);
-      const backgroundGray = toGrayscale(backgroundData.data);
 
       // Background subtraction: |Current - Background|
       const diff = new Uint8Array(currentGray.length);
@@ -221,11 +317,13 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
         binary = erode(diff, width, height);
       }
 
-      // Calculate center of mass
+      // Calculate center of mass (in downscaled coords)
       const result = calculateCenterOfMass(binary, width, height);
 
-      // Filter by minimum area
-      if (!result || result.pixelCount < trackingConfig.mouseMinArea) {
+      // Scale minimum area threshold to match downscaled resolution
+      const scaledMinArea = trackingConfig.mouseMinArea / (scaleFactors.scaleX * scaleFactors.scaleY);
+
+      if (!result || result.pixelCount < scaledMinArea) {
         return {
           frameNumber,
           timestamp,
@@ -235,11 +333,16 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
         };
       }
 
+      // COORDINATE REMAPPING: Scale up to original resolution
+      const originalX = result.x * scaleFactors.scaleX;
+      const originalY = result.y * scaleFactors.scaleY;
+      const originalPixelCount = Math.round(result.pixelCount * scaleFactors.scaleX * scaleFactors.scaleY);
+
       return {
         frameNumber,
         timestamp,
-        centerOfMass: { x: result.x, y: result.y, timestamp },
-        pixelCount: result.pixelCount,
+        centerOfMass: { x: originalX, y: originalY, timestamp },
+        pixelCount: originalPixelCount,
         brightnessAverage: 0,
       };
     },
@@ -340,12 +443,20 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
             results.push(result);
           }
 
-          // Update progress
+          // THROTTLED progress and logging
           const progress = (timestamp / duration) * 100;
-          setTrackingProgress(progress);
+          const now = performance.now();
 
-          if (frameCount % 30 === 0) {
+          // Update progress at most every 200ms
+          if (now - lastProgressUpdateRef.current >= PROGRESS_THROTTLE_MS) {
+            setTrackingProgress(progress);
+            lastProgressUpdateRef.current = now;
+          }
+
+          // Log at most every 500ms
+          if (now - lastLogTimeRef.current >= LOG_THROTTLE_MS) {
             console.log(`[Mouse Tracker] Processed frame ${frameNumber}/${totalFrames} (${progress.toFixed(1)}%)`);
+            lastLogTimeRef.current = now;
           }
         }
 
@@ -409,12 +520,18 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
    */
   useEffect(() => {
     return () => {
+      // Cancel video frame callback
       if (frameCallbackIdRef.current !== null) {
         const video = videoRef.current;
         if (video && 'cancelVideoFrameCallback' in video) {
           (video as any).cancelVideoFrameCallback(frameCallbackIdRef.current);
         }
       }
+
+      // Clean up processing refs
+      processingCanvasRef.current = null;
+      backgroundGrayscaleRef.current = null;
+      scaleFactorsRef.current = null;
     };
   }, [videoRef]);
 

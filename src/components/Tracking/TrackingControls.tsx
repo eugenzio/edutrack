@@ -6,6 +6,10 @@ import { useVideoRefs } from '../../contexts/VideoRefsContext';
 
 export function TrackingControls() {
   const { videoRef, canvasRef } = useVideoRefs();
+
+  console.log('[TrackingControls] videoRef:', videoRef);
+  console.log('[TrackingControls] videoRef.current:', videoRef.current);
+
   const isVideoLoaded = useVideoStore((state) => state.isVideoLoaded());
   const isTracking = useTrackingStore((state) => state.isTracking);
   const trackingProgress = useTrackingStore((state) => state.trackingProgress);
