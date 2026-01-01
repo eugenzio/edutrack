@@ -10,7 +10,7 @@ interface DrawingState {
 }
 
 interface UseZoneDrawerProps {
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
   videoWidth: number;
   videoHeight: number;
 }

@@ -1,8 +1,8 @@
 import { createContext, useContext, useRef, type ReactNode, type RefObject } from 'react';
 
 interface VideoRefsContextValue {
-  videoRef: RefObject<HTMLVideoElement | null>;
-  canvasRef: RefObject<HTMLCanvasElement | null>;
+  videoRef: RefObject<HTMLVideoElement>;
+  canvasRef: RefObject<HTMLCanvasElement>;
 }
 
 const VideoRefsContext = createContext<VideoRefsContextValue | null>(null);

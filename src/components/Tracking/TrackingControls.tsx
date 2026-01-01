@@ -1,7 +1,6 @@
 import { useTrackingStore } from '../../stores/trackingSlice';
 import { useColorTracker } from '../../hooks/useColorTracker';
-import { useAiTracker } from '../../hooks/useAiTracker';
-import { useKnnTracker } from '../../hooks/useKnnTracker';
+import { useMouseTracker } from '../../hooks/useMouseTracker';
 import { useVideoStore } from '../../stores/trackingStore';
 import { useVideoRefs } from '../../contexts/VideoRefsContext';
 
@@ -16,26 +15,9 @@ export function TrackingControls() {
   const hasData = useTrackingStore((state) => state.hasTrackingData());
   const error = useTrackingStore((state) => state.error);
 
-  // AI-specific state
-  const isModelLoading = useTrackingStore((state) => state.isModelLoading);
-  const modelError = useTrackingStore((state) => state.modelError);
-  const detectedClasses = useTrackingStore((state) => state.detectedClasses);
-  const lastAiBoxSource = useTrackingStore((state) => state.lastAiBoxSource);
-  const lostCount = useTrackingStore((state) => state.lostCount);
-  const clearAiLock = useTrackingStore((state) => state.clearAiLock);
-  const showDebugOverlay = useTrackingStore((state) => state.showDebugOverlay);
-  const setShowDebugOverlay = useTrackingStore((state) => state.setShowDebugOverlay);
-  const isScanningFrame = useTrackingStore((state) => state.isScanningFrame);
-  const scanError = useTrackingStore((state) => state.scanError);
-  const lastScanSummary = useTrackingStore((state) => state.lastScanSummary);
-  const isLivePreview = useTrackingStore((state) => state.isLivePreview);
-  const setIsLivePreview = useTrackingStore((state) => state.setIsLivePreview);
-
   // IMPORTANT: Always call all hooks unconditionally (React Hooks rule)
-  // But they will only execute heavy operations when their method is active
   const brightnessTracker = useColorTracker({ videoRef, canvasRef });
-  const aiTracker = useAiTracker({ videoRef, canvasRef });
-  const knnTracker = useKnnTracker({ videoRef, canvasRef });
+  const mouseTracker = useMouseTracker({ videoRef, canvasRef });
 
   if (!isVideoLoaded) return null;
 
@@ -50,12 +32,9 @@ export function TrackingControls() {
   const handleStartTracking = () => {
     console.log(`[TrackingControls] Starting tracking with method: ${config.method}`);
 
-    if (config.method === 'ai-object') {
-      console.log('[TrackingControls] Running AI tracking...');
-      aiTracker.runTracking();
-    } else if (config.method === 'knn-custom') {
-      console.log('[TrackingControls] Running KNN tracking...');
-      knnTracker.runTracking();
+    if (config.method === 'mouse-tracker') {
+      console.log('[TrackingControls] Running mouse tracker...');
+      mouseTracker.runTracking();
     } else {
       console.log('[TrackingControls] Running brightness tracking...');
       brightnessTracker.runTracking();
@@ -65,54 +44,36 @@ export function TrackingControls() {
   const handleStopTracking = () => {
     console.log(`[TrackingControls] Stopping tracking with method: ${config.method}`);
 
-    if (config.method === 'ai-object') {
-      aiTracker.cancelTracking();
-    } else if (config.method === 'knn-custom') {
-      knnTracker.cancelTracking();
+    if (config.method === 'mouse-tracker') {
+      mouseTracker.cancelTracking();
     } else {
       brightnessTracker.cancelTracking();
     }
   };
 
-  const handleScanFrame = () => {
-    aiTracker.warmupDetection();
-  };
-
   const isStartDisabled =
     isTracking ||
-    (config.method === 'ai-object' && (!config.aiTargetClass || !aiTracker.isModelReady)) ||
-    (config.method === 'knn-custom' && (!knnTracker.knnReady || !knnTracker.isModelReady));
+    (config.method === 'mouse-tracker' && !mouseTracker.hasBackground);
 
   return (
     <div className="border border-gray-300 bg-white">
       <div className="px-2 py-1 bg-gray-200 border-b border-gray-300 text-xs font-semibold">
-        Tracking
+        🐭 Mouse Tracker
       </div>
 
       <div className="p-2 space-y-2">
         {/* Method Selector */}
         <div className="flex gap-1 border-b border-gray-300 pb-2">
           <button
-            onClick={() => updateConfig({ method: 'ai-object' })}
+            onClick={() => updateConfig({ method: 'mouse-tracker' })}
             disabled={isTracking}
             className={`flex-1 px-2 py-1 text-xs ${
-              config.method === 'ai-object'
+              config.method === 'mouse-tracker'
                 ? 'bg-gray-700 text-white border border-gray-600'
-                : 'bg-gray-100 text-gray-700 border border-gray-300'
-            } disabled:opacity-50`}
+                : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
+            }`}
           >
-            AI Object
-          </button>
-          <button
-            onClick={() => updateConfig({ method: 'knn-custom' })}
-            disabled={isTracking}
-            className={`flex-1 px-2 py-1 text-xs ${
-              config.method === 'knn-custom'
-                ? 'bg-gray-700 text-white border border-gray-600'
-                : 'bg-gray-100 text-gray-700 border border-gray-300'
-            } disabled:opacity-50`}
-          >
-            Custom Train
+            Background Subtraction
           </button>
           <button
             onClick={() => updateConfig({ method: 'brightness' })}
@@ -120,313 +81,162 @@ export function TrackingControls() {
             className={`flex-1 px-2 py-1 text-xs ${
               config.method === 'brightness'
                 ? 'bg-gray-700 text-white border border-gray-600'
-                : 'bg-gray-100 text-gray-700 border border-gray-300'
-            } disabled:opacity-50`}
+                : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
+            }`}
           >
-            Brightness
+            Brightness (Legacy)
           </button>
         </div>
 
-        {/* AI Panel */}
-        {config.method === 'ai-object' && (
+        {/* Mouse Tracker Panel */}
+        {config.method === 'mouse-tracker' && (
           <>
-            {/* Model Status */}
-            {isModelLoading && (
-              <div className="text-xs text-blue-700 bg-blue-50 border border-blue-600 p-1">
-                Loading AI model...
-              </div>
-            )}
-            {modelError && (
-              <div className="text-xs text-red-800 bg-red-50 border border-red-600 p-1">
-                Model Error: {modelError}
-              </div>
-            )}
-
-            {/* Confidence Slider */}
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <label className="text-xs text-gray-600">Confidence</label>
-                <span className="text-xs font-mono text-gray-800">
-                  {(config.aiConfidence * 100).toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={config.aiConfidence * 100}
-                onChange={(e) => updateConfig({ aiConfidence: Number(e.target.value) / 100 })}
-                disabled={isTracking}
-                className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
-              />
-              <p className="text-xs text-gray-500 mt-0.5">
-                If nothing is detected, lower Confidence (0.3–0.5) and scan again.
-              </p>
-            </div>
-
-            {/* Scan Frame Button */}
-            <button
-              onClick={handleScanFrame}
-              disabled={isTracking || isScanningFrame}
-              className="w-full px-2 py-1 border border-gray-400 bg-gray-100 hover:bg-gray-200 text-xs disabled:opacity-50"
-            >
-              {isScanningFrame ? 'Scanning...' : isModelLoading ? 'Loading Model...' : 'Scan Frame'}
-            </button>
-
-            {/* Scan Status */}
-            {isScanningFrame && (
-              <div className="text-xs text-blue-700 bg-blue-50 border border-blue-600 p-1">
-                Scanning current frame...
-              </div>
-            )}
-            {!isScanningFrame && scanError && (
-              <div className="text-xs text-orange-700 bg-orange-50 border border-orange-600 p-1">
-                {scanError}
-              </div>
-            )}
-            {!isScanningFrame && !scanError && lastScanSummary && (
-              <div className="text-xs text-gray-700 bg-gray-50 border border-gray-400 p-1.5 space-y-0.5">
-                <div className="font-semibold">Last Scan Results:</div>
-                <div className="grid grid-cols-2 gap-x-2">
-                  <span>Raw predictions:</span>
-                  <span className="font-mono">{lastScanSummary.rawPredictions}</span>
-                  <span>Filtered detections:</span>
-                  <span className="font-mono">{lastScanSummary.filteredDetections}</span>
-                  <span>Max score:</span>
-                  <span className="font-mono">{(lastScanSummary.maxScore * 100).toFixed(1)}%</span>
-                </div>
-                {lastScanSummary.topClasses.length > 0 && (
-                  <div className="pt-0.5">
-                    <div className="font-semibold">Top classes:</div>
-                    <div className="text-xs">
-                      {lastScanSummary.topClasses.map((tc, i) => (
-                        <div key={i} className="font-mono">
-                          {tc.cls} ({(tc.score * 100).toFixed(1)}%)
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Target Class Dropdown */}
-            <div className="space-y-1">
-              <label className="text-xs text-gray-600">Target Class</label>
-              <select
-                value={config.aiTargetClass || ''}
-                onChange={(e) => updateConfig({ aiTargetClass: e.target.value || null })}
-                disabled={isTracking || detectedClasses.length === 0}
-                className="w-full px-2 py-1 text-xs border border-gray-300 disabled:opacity-50"
-              >
-                <option value="">Select class...</option>
-                {detectedClasses.map((cls) => (
-                  <option key={cls} value={cls}>
-                    {cls}
-                  </option>
-                ))}
-              </select>
-              {!config.aiTargetClass && detectedClasses.length === 0 && (
-                <p className="text-xs text-orange-700 bg-orange-50 border border-orange-600 p-1 mt-1">
-                  Scan or enable Live Preview to discover classes, then select a Target Class.
-                </p>
-              )}
-              {!config.aiTargetClass && detectedClasses.length > 0 && (
-                <p className="text-xs text-orange-700 bg-orange-50 border border-orange-600 p-1 mt-1">
-                  Select a Target Class to enable tracking.
-                </p>
-              )}
-            </div>
-
-            {/* Lock Status */}
-            {lastAiBoxSource === 'user' && (
-              <div className="flex items-center justify-between text-xs bg-yellow-50 border border-yellow-600 p-1">
-                <span className="font-semibold text-yellow-800">LOCKED</span>
-                <button
-                  onClick={clearAiLock}
-                  className="px-1 py-0.5 border border-yellow-700 bg-yellow-100 hover:bg-yellow-200"
-                >
-                  Unlock
-                </button>
-              </div>
-            )}
-
-            {/* Lost Frame Counter */}
-            {lostCount > 0 && (
-              <div className="text-xs text-orange-700 bg-orange-50 border border-orange-600 p-1">
-                Lost for {lostCount} frame{lostCount > 1 ? 's' : ''}
-              </div>
-            )}
-
-            {/* Strategy Selector */}
-            <div className="space-y-1">
-              <label className="text-xs text-gray-600">Tracking Strategy</label>
-              <select
-                value={config.aiTrackStrategy}
-                onChange={(e) => updateConfig({ aiTrackStrategy: e.target.value as any })}
-                disabled={isTracking}
-                className="w-full px-2 py-1 text-xs border border-gray-300 disabled:opacity-50"
-              >
-                <option value="nearestPrev">Nearest to Previous</option>
-                <option value="highestScore">Highest Score</option>
-                <option value="largest">Largest</option>
-              </select>
-            </div>
-
-            {/* Live Preview Toggle */}
-            <label className="flex items-center gap-2 text-xs text-gray-600">
-              <input
-                type="checkbox"
-                checked={isLivePreview}
-                onChange={(e) => setIsLivePreview(e.target.checked)}
-                disabled={!aiTracker.isModelReady}
-                className="w-3 h-3 disabled:opacity-50"
-              />
-              Live Preview (while playing)
-            </label>
-
-            {/* Debug Overlay Toggle */}
-            <label className="flex items-center gap-2 text-xs text-gray-600">
-              <input
-                type="checkbox"
-                checked={showDebugOverlay}
-                onChange={(e) => setShowDebugOverlay(e.target.checked)}
-                className="w-3 h-3"
-              />
-              Show Debug Overlay
-            </label>
-          </>
-        )}
-
-        {/* KNN Custom Train Panel */}
-        {config.method === 'knn-custom' && (
-          <>
-            {/* Model Status */}
-            {isModelLoading && (
-              <div className="text-xs text-blue-700 bg-blue-50 border border-blue-600 p-1">
-                Loading KNN models...
-              </div>
-            )}
-            {modelError && (
-              <div className="text-xs text-red-800 bg-red-50 border border-red-600 p-1">
-                Model Error: {modelError}
-              </div>
-            )}
-
-            {/* Training Instructions */}
+            {/* Instructions */}
             <div className="text-xs bg-blue-50 border border-blue-600 p-1.5">
-              <div className="font-semibold mb-1">Training Instructions:</div>
-              <ol className="list-decimal list-inside space-y-0.5">
-                <li>Click "Start Training" below</li>
-                <li>Click on the animal/object (target)</li>
-                <li>Click on empty areas (background)</li>
-                <li>Collect 5-10 samples of each</li>
-                <li>Click "Done Training" when ready</li>
+              <p className="font-semibold text-blue-900 mb-1">Quick Start:</p>
+              <ol className="list-decimal list-inside space-y-0.5 text-blue-800">
+                <li>Seek to an empty cage frame (no mouse visible)</li>
+                <li>Click "Capture Background" below</li>
+                <li>Adjust threshold and filters if needed</li>
+                <li>Click "Start Tracking" to analyze the video</li>
               </ol>
             </div>
 
-            {/* Training Button */}
-            {!knnTracker.isTrainingMode ? (
-              <button
-                onClick={() => knnTracker.startTraining()}
-                disabled={!knnTracker.isModelReady || isTracking}
-                className="w-full px-2 py-1 border border-gray-600 bg-gray-700 hover:bg-gray-600 text-white text-xs disabled:opacity-50"
-              >
-                {knnTracker.isModelReady ? 'Start Training' : 'Loading Models...'}
-              </button>
-            ) : (
-              <button
-                onClick={() => knnTracker.stopTraining()}
-                className="w-full px-2 py-1 border border-red-700 bg-red-600 hover:bg-red-500 text-white text-xs"
-              >
-                Done Training
-              </button>
-            )}
-
-            {/* Training Mode Indicator */}
-            {knnTracker.isTrainingMode && (
-              <div className="text-xs text-green-700 bg-green-50 border border-green-600 p-1">
-                Training Mode Active: Click on the video to add samples
+            {/* Background Capture */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-gray-700">
+                  1. Reference Background
+                </label>
+                {mouseTracker.hasBackground && (
+                  <span className="text-xs text-green-700 font-semibold">✓ Captured</span>
+                )}
               </div>
-            )}
 
-            {/* Sample Counts */}
-            <div className="text-xs bg-gray-50 border border-gray-400 p-1.5">
-              <div className="grid grid-cols-2 gap-x-2">
-                <span>Target Samples:</span>
-                <span className="font-mono font-semibold">{knnTracker.targetSamples}</span>
-                <span>Background Samples:</span>
-                <span className="font-mono font-semibold">{knnTracker.backgroundSamples}</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={mouseTracker.captureBackground}
+                  disabled={isTracking || !mouseTracker.isReady}
+                  className="flex-1 px-2 py-1 border border-green-700 bg-green-600 hover:bg-green-500 text-white text-xs disabled:opacity-50"
+                >
+                  {mouseTracker.hasBackground ? 'Re-capture Background' : 'Capture Background'}
+                </button>
+                {mouseTracker.hasBackground && (
+                  <button
+                    onClick={mouseTracker.clearBackground}
+                    disabled={isTracking}
+                    className="px-2 py-1 border border-red-700 bg-red-600 hover:bg-red-500 text-white text-xs disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
-              {knnTracker.knnReady && (
-                <div className="mt-1 text-green-700 font-semibold">
-                  Ready to track!
-                </div>
-              )}
-              {!knnTracker.knnReady && (knnTracker.targetSamples > 0 || knnTracker.backgroundSamples > 0) && (
-                <div className="mt-1 text-orange-700">
-                  Need at least 3 samples of each type
+
+              {/* Background Preview */}
+              {mouseTracker.backgroundPreview && (
+                <div className="mt-1">
+                  <img
+                    src={mouseTracker.backgroundPreview}
+                    alt="Background reference"
+                    className="w-full h-auto border border-gray-400 rounded"
+                  />
+                  <p className="text-xs text-gray-600 mt-0.5 text-center">
+                    Background reference frame
+                  </p>
                 </div>
               )}
             </div>
 
-            {/* KNN Parameters */}
+            {/* Threshold Slider */}
             <div className="space-y-1">
               <div className="flex justify-between items-center">
-                <label className="text-xs text-gray-600">Window Size</label>
-                <span className="text-xs font-mono text-gray-800">{config.knnWindowSize}px</span>
+                <label className="text-xs text-gray-600">2. Difference Threshold</label>
+                <span className="text-xs font-mono text-gray-800">{config.mouseThreshold}</span>
               </div>
               <input
                 type="range"
-                min="40"
-                max="120"
-                step="10"
-                value={config.knnWindowSize}
-                onChange={(e) => updateConfig({ knnWindowSize: Number(e.target.value) })}
-                disabled={isTracking || knnTracker.isTrainingMode}
-                className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <label className="text-xs text-gray-600">Confidence</label>
-                <span className="text-xs font-mono text-gray-800">
-                  {(config.knnConfidence * 100).toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
+                min="5"
                 max="100"
-                value={config.knnConfidence * 100}
-                onChange={(e) => updateConfig({ knnConfidence: Number(e.target.value) / 100 })}
+                value={config.mouseThreshold}
+                onChange={(e) => updateConfig({ mouseThreshold: Number(e.target.value) })}
                 disabled={isTracking}
                 className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
               />
+              <p className="text-xs text-gray-500">
+                Higher = less sensitive to lighting changes. Start with 20-40.
+              </p>
             </div>
 
-            {/* Debug Overlay Toggle */}
-            <label className="flex items-center gap-2 text-xs text-gray-600">
+            {/* Min Area Slider */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <label className="text-xs text-gray-600">3. Minimum Area (px)</label>
+                <span className="text-xs font-mono text-gray-800">{config.mouseMinArea}</span>
+              </div>
               <input
-                type="checkbox"
-                checked={showDebugOverlay}
-                onChange={(e) => setShowDebugOverlay(e.target.checked)}
-                className="w-3 h-3"
+                type="range"
+                min="50"
+                max="500"
+                step="10"
+                value={config.mouseMinArea}
+                onChange={(e) => updateConfig({ mouseMinArea: Number(e.target.value) })}
+                disabled={isTracking}
+                className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
               />
-              Show Debug Overlay
-            </label>
+              <p className="text-xs text-gray-500">
+                Filter out small noise (bedding, feces). Typical mouse = 200-400px.
+              </p>
+            </div>
+
+            {/* Invert Toggle */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={config.mouseInvert}
+                  onChange={(e) => updateConfig({ mouseInvert: e.target.checked })}
+                  disabled={isTracking}
+                  className="w-3 h-3 disabled:opacity-50"
+                />
+                <span className="flex-1">Invert Mask (for black mice on light background)</span>
+              </label>
+            </div>
+
+            {/* Erosion Toggle */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={config.mouseErosion}
+                  onChange={(e) => updateConfig({ mouseErosion: e.target.checked })}
+                  disabled={isTracking}
+                  className="w-3 h-3 disabled:opacity-50"
+                />
+                <span className="flex-1">Tail Rejection (erosion to focus on body)</span>
+              </label>
+              <p className="text-xs text-gray-500 ml-5">
+                Removes thin structures like tails to reduce jitter. Use if tail causes tracking issues.
+              </p>
+            </div>
           </>
         )}
 
-        {/* Brightness Panel */}
+        {/* Brightness Panel (Legacy) */}
         {config.method === 'brightness' && (
           <>
-            {/* Brightness threshold */}
+            <div className="text-xs bg-yellow-50 border border-yellow-600 p-1.5">
+              <p className="text-yellow-900">
+                <strong>Legacy Mode:</strong> Uses simple brightness thresholding.
+                For rodents, "Background Subtraction" is recommended.
+              </p>
+            </div>
+
             <div className="space-y-1">
               <div className="flex justify-between items-center">
                 <label className="text-xs text-gray-600">Brightness Threshold</label>
-                <span className="text-xs font-mono text-gray-800">{config.brightnessThreshold}</span>
+                <span className="text-xs font-mono text-gray-800">
+                  {config.brightnessThreshold}
+                </span>
               </div>
               <input
                 type="range"
@@ -439,11 +249,12 @@ export function TrackingControls() {
               />
             </div>
 
-            {/* Minimum pixel count */}
             <div className="space-y-1">
               <div className="flex justify-between items-center">
                 <label className="text-xs text-gray-600">Min Pixel Count</label>
-                <span className="text-xs font-mono text-gray-800">{config.minPixelCount}</span>
+                <span className="text-xs font-mono text-gray-800">
+                  {config.minPixelCount}
+                </span>
               </div>
               <input
                 type="range"
@@ -458,73 +269,81 @@ export function TrackingControls() {
           </>
         )}
 
-        {/* Buttons */}
-        <div className="flex gap-1 pt-1">
-          {!isTracking && !hasData && (
+        {/* Frame Sampling */}
+        <div className="space-y-1 border-t border-gray-300 pt-2">
+          <div className="flex justify-between items-center">
+            <label className="text-xs text-gray-600">Sample Every Nth Frame</label>
+            <span className="text-xs font-mono text-gray-800">
+              {config.sampleEveryNthFrame}
+            </span>
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="10"
+            value={config.sampleEveryNthFrame}
+            onChange={(e) => updateConfig({ sampleEveryNthFrame: Number(e.target.value) })}
+            disabled={isTracking}
+            className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
+          />
+          <p className="text-xs text-gray-500">
+            Higher = faster processing but lower temporal resolution. 1 = every frame.
+          </p>
+        </div>
+
+        {/* Tracking Controls */}
+        <div className="flex gap-1 border-t border-gray-300 pt-2">
+          {!isTracking ? (
             <button
               onClick={handleStartTracking}
               disabled={isStartDisabled}
-              className="flex-1 px-2 py-1 border border-gray-600 bg-gray-700 hover:bg-gray-600 text-white text-xs disabled:opacity-50"
+              className="flex-1 px-2 py-1.5 border border-green-700 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold disabled:opacity-50"
             >
-              Start
+              {config.method === 'mouse-tracker' && !mouseTracker.hasBackground
+                ? 'Capture Background First'
+                : 'Start Tracking'}
             </button>
-          )}
-
-          {isTracking && (
-            <button
-              onClick={handleStopTracking}
-              className="flex-1 px-2 py-1 border border-red-700 bg-red-600 hover:bg-red-500 text-white text-xs"
-            >
-              Stop
-            </button>
-          )}
-
-          {!isTracking && hasData && (
+          ) : (
             <>
               <button
-                onClick={handleStartTracking}
-                disabled={isStartDisabled}
-                className="flex-1 px-2 py-1 border border-gray-600 bg-gray-700 hover:bg-gray-600 text-white text-xs disabled:opacity-50"
+                onClick={handleStopTracking}
+                className="flex-1 px-2 py-1.5 border border-red-700 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold"
               >
-                Re-run
+                Stop Tracking
               </button>
-              <button
-                onClick={resetTracking}
-                className="px-2 py-1 border border-gray-400 bg-gray-100 hover:bg-gray-200 text-xs"
-              >
-                Reset
-              </button>
+              <div className="flex-1 px-2 py-1.5 bg-blue-600 text-white text-sm font-semibold text-center">
+                {trackingProgress.toFixed(1)}%
+              </div>
             </>
           )}
         </div>
 
-        {/* Progress bar */}
-        {isTracking && (
-          <div className="space-y-1">
-            <div className="flex justify-between text-xs text-gray-600">
-              <span>Processing...</span>
-              <span className="font-mono">{Math.round(trackingProgress)}%</span>
-            </div>
-            <div className="w-full bg-gray-300 h-2">
-              <div
-                className="bg-gray-700 h-full"
-                style={{ width: `${trackingProgress}%` }}
-              ></div>
-            </div>
-          </div>
-        )}
-
-        {/* Status */}
         {hasData && !isTracking && (
-          <div className="text-xs text-green-700 bg-green-50 border border-green-600 p-1">
-            Complete
-          </div>
+          <button
+            onClick={resetTracking}
+            className="w-full px-2 py-1 border border-gray-600 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs"
+          >
+            Reset Tracking Data
+          </button>
         )}
 
-        {/* Error */}
+        {/* Error Display */}
         {error && (
           <div className="text-xs text-red-800 bg-red-50 border border-red-600 p-1">
             {error}
+          </div>
+        )}
+
+        {/* Performance Info */}
+        {config.method === 'mouse-tracker' && (
+          <div className="text-xs bg-gray-50 border border-gray-400 p-1.5 mt-2">
+            <p className="font-semibold text-gray-700 mb-1">📊 Algorithm Details:</p>
+            <ul className="list-disc list-inside space-y-0.5 text-gray-600">
+              <li><strong>Method:</strong> Background Subtraction (Frame Differencing)</li>
+              <li><strong>Processing:</strong> Grayscale conversion (4x faster than RGB)</li>
+              <li><strong>Blob Detection:</strong> Center of Mass calculation</li>
+              <li><strong>Real-time:</strong> Uses requestVideoFrameCallback (30-60 FPS)</li>
+            </ul>
           </div>
         )}
       </div>

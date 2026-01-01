@@ -5,8 +5,8 @@ import { detectBrightObjects } from '../utils/colorDetection';
 import type { TrackingResult } from '../types';
 
 interface UseColorTrackerProps {
-  videoRef: React.RefObject<HTMLVideoElement | null>;
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  videoRef: React.RefObject<HTMLVideoElement>;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
 }
 
 export function useColorTracker({ videoRef, canvasRef }: UseColorTrackerProps) {

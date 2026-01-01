@@ -66,6 +66,12 @@ export interface TrackingConfiguration {
   knnWindowSize: number;             // Sliding window size for search, default 80
   knnSearchRadius: number;           // Search radius around last position, default 100
   knnConfidence: number;             // Minimum confidence for KNN prediction, default 0.6
+
+  // NEW: Mouse tracker configuration (Background Subtraction)
+  mouseThreshold: number;            // Difference threshold for background subtraction, default 30
+  mouseMinArea: number;              // Minimum blob area in pixels to filter noise, default 100
+  mouseInvert: boolean;              // Invert mask for black mice on light background, default false
+  mouseErosion: boolean;             // Apply morphological erosion to remove tail, default false
 }
 
 // Tracking state
@@ -163,7 +169,7 @@ export interface CalibrationState {
 }
 
 // AI Tracking types (Phase 5)
-export type TrackingMethod = 'ai-object' | 'brightness' | 'knn-custom';
+export type TrackingMethod = 'ai-object' | 'brightness' | 'knn-custom' | 'mouse-tracker';
 
 export interface BBox {
   x: number;      // top-left x coordinate

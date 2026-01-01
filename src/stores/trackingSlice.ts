@@ -80,7 +80,7 @@ const DEFAULT_CONFIG: TrackingConfiguration = {
   sampleEveryNthFrame: 1,
 
   // NEW: AI defaults
-  method: 'ai-object',
+  method: 'mouse-tracker',
   aiConfidence: 0.5,
   aiTargetClass: null,
   aiTrackStrategy: 'nearestPrev',
@@ -91,6 +91,12 @@ const DEFAULT_CONFIG: TrackingConfiguration = {
   knnWindowSize: 80,
   knnSearchRadius: 100,
   knnConfidence: 0.6,
+
+  // NEW: Mouse tracker defaults
+  mouseThreshold: 30,
+  mouseMinArea: 100,
+  mouseInvert: false,
+  mouseErosion: false,
 };
 
 export const useTrackingStore = create<TrackingStore>((set, get) => ({

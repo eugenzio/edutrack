@@ -2,7 +2,7 @@ import { useEffect, type MouseEvent } from 'react';
 import { useCalibrationStore } from '../stores/calibrationSlice';
 
 interface UseCalibrationDrawerProps {
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
   videoWidth: number;
   videoHeight: number;
 }

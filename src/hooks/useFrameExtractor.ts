@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { useVideoStore } from '../stores/trackingStore';
 
 interface UseFrameExtractorProps {
-  videoRef: React.RefObject<HTMLVideoElement | null>;
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  videoRef: React.RefObject<HTMLVideoElement>;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
 }
 
 export function useFrameExtractor({ videoRef, canvasRef }: UseFrameExtractorProps) {

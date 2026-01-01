@@ -162,3 +162,48 @@ export function hitTestBBox(
     videoY <= bbox.y + bbox.height
   );
 }
+
+/**
+ * Predict next bounding box position based on velocity
+ * Used for keep-alive when object is temporarily lost
+ */
+export function predictNextPosition(
+  lastBox: BBox,
+  velocity: { vx: number; vy: number } | null
+): BBox {
+  if (!velocity) {
+    return lastBox;
+  }
+
+  // Simple linear prediction
+  return {
+    x: lastBox.x + velocity.vx,
+    y: lastBox.y + velocity.vy,
+    width: lastBox.width,
+    height: lastBox.height,
+  };
+}
+
+/**
+ * Calculate velocity between two bounding boxes
+ * Returns null if boxes are identical or input is invalid
+ */
+export function calculateVelocity(
+  prevBox: BBox | null,
+  currBox: BBox | null
+): { vx: number; vy: number } | null {
+  if (!prevBox || !currBox) return null;
+
+  const prevCenter = bboxCenter(prevBox);
+  const currCenter = bboxCenter(currBox);
+
+  const vx = currCenter.x - prevCenter.x;
+  const vy = currCenter.y - prevCenter.y;
+
+  // Return null if no movement (avoid division by zero issues)
+  if (Math.abs(vx) < 0.1 && Math.abs(vy) < 0.1) {
+    return null;
+  }
+
+  return { vx, vy };
+}

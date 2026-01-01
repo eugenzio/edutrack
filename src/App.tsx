@@ -24,9 +24,37 @@ function App() {
               <VideoPlayer />
             </section>
 
-            <section>
-              <PlaybackControls />
-            </section>
+            {!isVideoLoaded && (
+              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-lg p-8 text-center">
+                <div className="max-w-md mx-auto space-y-4">
+                  <div className="text-6xl">🎥</div>
+                  <h2 className="text-2xl font-bold text-gray-800">Welcome to EduTrack</h2>
+                  <p className="text-gray-600">
+                    Load a video file to start tracking objects using AI-powered detection,
+                    KNN custom training, or brightness-based analysis.
+                  </p>
+                  <div className="bg-white/80 rounded-lg p-4 space-y-2 text-sm text-left">
+                    <p className="font-semibold text-gray-700">Quick Start:</p>
+                    <ol className="list-decimal list-inside space-y-1 text-gray-600">
+                      <li>Click "Choose Video" above to load a video file</li>
+                      <li>Select a tracking method (AI, Custom Train, or Brightness)</li>
+                      <li>Configure tracking parameters</li>
+                      <li>Click "Start Tracking" to analyze</li>
+                      <li>Export results as CSV when complete</li>
+                    </ol>
+                  </div>
+                  <div className="text-xs text-gray-500 pt-2">
+                    Supported formats: MP4, WebM, MOV
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isVideoLoaded && (
+              <section>
+                <PlaybackControls />
+              </section>
+            )}
           </div>
 
           {/* Right column: Tracking controls, calibration, zones, and metrics */}
