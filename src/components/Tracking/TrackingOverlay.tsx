@@ -1,103 +1,190 @@
-import { useEffect, useRef } from 'react';
-import { useTrackingStore } from '../../stores/trackingSlice';
-import { useVideoStore } from '../../stores/trackingStore';
+import React, { useEffect, useRef } from 'react';
+import type { TrackingResult } from '../../types';
 
 interface TrackingOverlayProps {
-  width: number;
-  height: number;
+  results: TrackingResult[];
+  currentFrameIndex: number;
+  videoRef: React.RefObject<HTMLVideoElement>;
 }
 
-export function TrackingOverlay({ width, height }: TrackingOverlayProps) {
-  const overlayRef = useRef<HTMLCanvasElement>(null);
-  const results = useTrackingStore((state) => state.results);
-  const currentTime = useVideoStore((state) => state.playback.currentTime);
-  const metadata = useVideoStore((state) => state.metadata);
-  const hasData = useTrackingStore((state) => state.hasTrackingData());
+export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
+  results,
+  currentFrameIndex,
+  videoRef
+}) => {
+  const trajectoryCanvasRef = useRef<HTMLCanvasElement>(null);
+  const markerCanvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number>();
+  const lastFrameIndexRef = useRef<number>(-1);
 
+  // 1. 캔버스 크기 맞추기
   useEffect(() => {
-    const overlay = overlayRef.current;
+    const updateCanvasSize = () => {
+      if (videoRef.current && trajectoryCanvasRef.current && markerCanvasRef.current) {
+        const videoWidth = videoRef.current.clientWidth;
+        const videoHeight = videoRef.current.clientHeight;
+        
+        trajectoryCanvasRef.current.width = videoWidth;
+        trajectoryCanvasRef.current.height = videoHeight;
+        markerCanvasRef.current.width = videoWidth;
+        markerCanvasRef.current.height = videoHeight;
+      }
+    };
 
-    if (!overlay || !hasData || !metadata) return;
+    updateCanvasSize();
+    window.addEventListener('resize', updateCanvasSize);
+    return () => window.removeEventListener('resize', updateCanvasSize);
+  }, [videoRef]);
 
-    const ctx = overlay.getContext('2d', { alpha: true });
+  // 2. 궤적 그리기 (빨간 선)
+  useEffect(() => {
+    const canvas = trajectoryCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear overlay
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    // 프레임이 바뀌었을 때만 다시 그리기
+    if (currentFrameIndex === lastFrameIndexRef.current) return;
+    lastFrameIndexRef.current = currentFrameIndex;
 
-    // Calculate which frame to show based on current time
-    const currentFrameIndex = Math.floor(currentTime * metadata.fps);
-    const currentResult = results.find((r) => r.frameNumber === currentFrameIndex);
-
-    // Draw trajectory line (all previous points)
-    ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
     ctx.lineWidth = 2;
     ctx.beginPath();
 
     let hasStarted = false;
-    for (let i = 0; i <= results.length; i++) {
-      const result = results[i];
-      if (result?.frameNumber > currentFrameIndex) break;
+    let lastX = 0;
+    let lastY = 0;
 
-      if (result?.centerOfMass) {
+    // 화면 가장자리 여유분 (여기 찍힌 건 무시)
+    const edgeMargin = Math.min(canvas.width, canvas.height) * 0.02; // 2% 여유
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+
+      // 현재 프레임까지만 그림
+      if (result.frameNumber > currentFrameIndex) break;
+
+      if (result.centerOfMass) {
         const x = result.centerOfMass.x;
         const y = result.centerOfMass.y;
 
-        if (!hasStarted) {
+        // [필터 1] 유효하지 않은 점 (0,0) 스킵
+        if (x === 0 && y === 0) {
+          hasStarted = false;
+          continue;
+        }
+
+        // [필터 2] 화면 범위 밖 점 스킵
+        if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) {
+          hasStarted = false;
+          continue;
+        }
+
+        // [필터 3] 화면 가장자리 2% 이내에 있는 점은 그리지 않음 (케이지 벽 방지)
+        if (x < edgeMargin || x > canvas.width - edgeMargin ||
+            y < edgeMargin || y > canvas.height - edgeMargin) {
+          hasStarted = false; // 끊어서 그림
+          continue;
+        }
+
+        // [필터 4] 점프가 너무 크면(200px) 선을 잇지 않음 (순간이동 방지)
+        if (hasStarted) {
+          const dist = Math.sqrt(Math.pow(x - lastX, 2) + Math.pow(y - lastY, 2));
+          if (dist > 200) {
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        } else {
           ctx.moveTo(x, y);
           hasStarted = true;
-        } else {
-          ctx.lineTo(x, y);
+        }
+
+        lastX = x;
+        lastY = y;
+      } else {
+        // centerOfMass가 null일 때 - 감지 실패
+        hasStarted = false;
+        if (ctx) {
+          ctx.stroke(); // 현재 경로 종료
         }
       }
     }
     ctx.stroke();
 
-    // Draw current position as red dot
-    if (currentResult?.centerOfMass) {
-      const { x, y } = currentResult.centerOfMass;
+  }, [results, currentFrameIndex]);
 
-      // Outer glow
-      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-      ctx.beginPath();
-      ctx.arc(x, y, 12, 0, Math.PI * 2);
-      ctx.fill();
+  // 3. 현재 위치 표시 (빨간 점) - 부드러운 애니메이션
+  useEffect(() => {
+    const animate = () => {
+      const canvas = markerCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-      // Main dot
-      ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
-      ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Center point
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-      ctx.beginPath();
-      ctx.arc(x, y, 2, 0, Math.PI * 2);
-      ctx.fill();
+      // 현재 프레임 데이터 찾기
+      const currentResult = results.find(r => r.frameNumber === currentFrameIndex);
 
-      // Draw coordinates
-      ctx.fillStyle = 'white';
-      ctx.font = '12px monospace';
-      ctx.strokeStyle = 'black';
-      ctx.lineWidth = 3;
-      const text = `(${Math.round(x)}, ${Math.round(y)})`;
-      ctx.strokeText(text, x + 10, y - 10);
-      ctx.fillText(text, x + 10, y - 10);
-    }
-  }, [results, currentTime, metadata, hasData]);
+      if (currentResult?.centerOfMass) {
+        const { x, y } = currentResult.centerOfMass;
+        
+        // 가장자리 필터 통과한 경우에만 점 찍기
+        const edgeMargin = Math.min(canvas.width, canvas.height) * 0.02;
+        if (x >= edgeMargin && x <= canvas.width - edgeMargin && 
+            y >= edgeMargin && y <= canvas.height - edgeMargin) {
+          
+          ctx.fillStyle = 'red';
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
 
-  if (!hasData) return null;
+          // 좌표 텍스트
+          ctx.fillStyle = 'white';
+          ctx.font = '12px Arial';
+          ctx.fillText(`(${Math.round(x)}, ${Math.round(y)})`, x + 10, y - 10);
+        }
+      }
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+    return () => {
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    };
+  }, [results, currentFrameIndex]);
 
   return (
-    <canvas
-      ref={overlayRef}
-      width={width}
-      height={height}
-      className="absolute top-0 left-0 pointer-events-none"
-      style={{
-        width: '100%',
-        height: '100%',
-      }}
-    />
+    <>
+      <canvas
+        ref={trajectoryCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 10
+        }}
+      />
+      <canvas
+        ref={markerCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 11
+        }}
+      />
+    </>
   );
-}
+};

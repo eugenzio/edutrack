@@ -118,77 +118,121 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
   }, []);
 
   /**
-   * Capture reference background frame (empty cage)
+   * Capture reference background using Temporal Median Filtering
+   * Samples 15 frames across the video and computes median per pixel
+   * This automatically removes the moving mouse from the background
    */
-  const captureBackground = useCallback(() => {
-    console.log('[Mouse Tracker] captureBackground called');
+  const captureBackground = useCallback(async () => {
+    console.log('[Mouse Tracker] captureBackground called - using Temporal Median Filtering');
     const video = videoRef.current;
     const tempCanvas = tempCanvasRef.current;
     const processingCanvas = processingCanvasRef.current;
 
-    console.log('[Mouse Tracker] Refs:', {
-      video: !!video,
-      videoDetails: video ? {
-        readyState: video.readyState,
-        videoWidth: video.videoWidth,
-        videoHeight: video.videoHeight,
-        paused: video.paused,
-        currentTime: video.currentTime
-      } : 'null',
-      tempCanvas: !!tempCanvas,
-      tempCanvasDetails: tempCanvas ? { width: tempCanvas.width, height: tempCanvas.height } : 'null',
-      processingCanvas: !!processingCanvas,
-      processingCanvasDetails: processingCanvas ? { width: processingCanvas.width, height: processingCanvas.height } : 'null'
-    });
-
-    if (!video) {
-      console.error('[Mouse Tracker] Video element is null - videoRef.current is not set');
+    if (!video || !metadata) {
+      console.error('[Mouse Tracker] Video or metadata not ready');
       return;
     }
 
     if (!tempCanvas || !processingCanvas) {
-      console.error('[Mouse Tracker] Canvas not ready - tempCanvas:', !!tempCanvas, 'processingCanvas:', !!processingCanvas);
+      console.error('[Mouse Tracker] Canvas not ready');
       return;
     }
 
-    // Step 1: Draw full-res frame (for preview only)
-    const fullResCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-    if (!fullResCtx) return;
-    fullResCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-
-    // Step 2: Draw DOWNSCALED version to processing canvas
     const processingCtx = processingCanvas.getContext('2d', { willReadFrequently: true });
     if (!processingCtx) return;
-    processingCtx.drawImage(
-      video,
-      0, 0, tempCanvas.width, tempCanvas.height,  // Source
-      0, 0, processingCanvas.width, processingCanvas.height  // Dest
-    );
 
-    // Step 3: Get downscaled image data
-    const downscaledImageData = processingCtx.getImageData(
-      0, 0,
-      processingCanvas.width,
-      processingCanvas.height
-    );
+    const { width, height } = processingCanvas;
+    const pixelCount = width * height;
+    const numSamples = 15;
 
-    // Step 4: Convert to grayscale ONCE and cache
-    backgroundGrayscaleRef.current = toGrayscale(downscaledImageData.data);
-    backgroundImageDataRef.current = downscaledImageData;
+    // Sample frames evenly across video duration
+    const sampleTimes: number[] = [];
+    for (let i = 0; i < numSamples; i++) {
+      sampleTimes.push((video.duration * i) / (numSamples - 1));
+    }
 
-    // Create preview thumbnail (unchanged)
+    // Collect grayscale samples
+    const samples: Uint8Array[] = [];
+    const originalTime = video.currentTime;
+    const wasPaused = video.paused;
+
+    console.log(`[Mouse Tracker] Sampling ${numSamples} frames for temporal median...`);
+
+    for (let i = 0; i < numSamples; i++) {
+      // Seek to sample time
+      video.currentTime = sampleTimes[i];
+
+      // Wait for seek to complete
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        video.addEventListener('seeked', onSeeked, { once: true });
+      });
+
+      // Draw downscaled frame
+      processingCtx.drawImage(
+        video,
+        0, 0, video.videoWidth, video.videoHeight,
+        0, 0, width, height
+      );
+
+      // Get image data and convert to grayscale
+      const imageData = processingCtx.getImageData(0, 0, width, height);
+      const grayscale = toGrayscale(imageData.data);
+      samples.push(grayscale);
+
+      console.log(`[Mouse Tracker] Sampled frame ${i + 1}/${numSamples} at ${sampleTimes[i].toFixed(2)}s`);
+    }
+
+    // Compute median for each pixel
+    console.log('[Mouse Tracker] Computing temporal median...');
+    const medianBackground = new Uint8Array(pixelCount);
+
+    for (let pixelIdx = 0; pixelIdx < pixelCount; pixelIdx++) {
+      // Collect all values for this pixel across samples
+      const values = samples.map(sample => sample[pixelIdx]);
+
+      // Sort and take median
+      values.sort((a, b) => a - b);
+      medianBackground[pixelIdx] = values[Math.floor(numSamples / 2)];
+    }
+
+    // Cache the median background
+    backgroundGrayscaleRef.current = medianBackground;
+
+    // Create ImageData for storage (optional, for compatibility)
+    const medianImageData = processingCtx.createImageData(width, height);
+    for (let i = 0; i < pixelCount; i++) {
+      const gray = medianBackground[i];
+      medianImageData.data[i * 4] = gray;
+      medianImageData.data[i * 4 + 1] = gray;
+      medianImageData.data[i * 4 + 2] = gray;
+      medianImageData.data[i * 4 + 3] = 255;
+    }
+    backgroundImageDataRef.current = medianImageData;
+
+    // Create preview thumbnail
+    processingCtx.putImageData(medianImageData, 0, 0);
     const previewCanvas = document.createElement('canvas');
     previewCanvas.width = 160;
     previewCanvas.height = 120;
     const previewCtx = previewCanvas.getContext('2d');
     if (previewCtx) {
-      previewCtx.drawImage(tempCanvas, 0, 0, 160, 120);
+      previewCtx.drawImage(processingCanvas, 0, 0, 160, 120);
       setBackgroundPreview(previewCanvas.toDataURL());
     }
 
+    // Restore original video state
+    video.currentTime = originalTime;
+    if (!wasPaused) {
+      await video.play();
+    }
+
     setHasBackground(true);
-    console.log(`[Mouse Tracker] Background captured at ${processingCanvas.width}×${processingCanvas.height}`);
-  }, [videoRef, toGrayscale]);
+    console.log(`[Mouse Tracker] Temporal median background captured successfully!`);
+  }, [videoRef, metadata, toGrayscale]);
 
   /**
    * Clear background reference
@@ -232,41 +276,203 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
   }, []);
 
   /**
-   * Calculate center of mass (centroid) from binary mask
-   * This is more accurate than bounding box center for stretching mice
+   * Blob structure for connected component labeling
    */
-  const calculateCenterOfMass = useCallback((
+  interface Blob {
+    x: number;
+    y: number;
+    pixelCount: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  }
+
+  /**
+   * Connected component labeling using flood-fill algorithm
+   * Filters blobs by aspect ratio to remove cage structures
+   */
+  const findBlobs = useCallback((
     binary: Uint8Array,
     width: number,
-    height: number
-  ): { x: number; y: number; pixelCount: number } | null => {
-    let sumX = 0;
-    let sumY = 0;
-    let count = 0;
+    height: number,
+    minArea: number,
+    maxArea: number
+  ): Blob[] => {
+    const visited = new Uint8Array(binary.length);
+    const blobs: Blob[] = [];
 
+    const floodFill = (startX: number, startY: number): Blob | null => {
+      const stack: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
+      let sumX = 0;
+      let sumY = 0;
+      let count = 0;
+      let minX = startX;
+      let maxX = startX;
+      let minY = startY;
+      let maxY = startY;
+
+      while (stack.length > 0) {
+        const { x, y } = stack.pop()!;
+        const idx = y * width + x;
+
+        if (visited[idx] || binary[idx] === 0) continue;
+
+        visited[idx] = 1;
+        sumX += x;
+        sumY += y;
+        count++;
+
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+
+        // 4-connected neighbors
+        if (x > 0) stack.push({ x: x - 1, y });
+        if (x < width - 1) stack.push({ x: x + 1, y });
+        if (y > 0) stack.push({ x, y: y - 1 });
+        if (y < height - 1) stack.push({ x, y: y + 1 });
+      }
+
+      if (count === 0) return null;
+
+      return {
+        x: sumX / count,
+        y: sumY / count,
+        pixelCount: count,
+        minX,
+        maxX,
+        minY,
+        maxY,
+      };
+    };
+
+    // Scan for blobs
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = y * width + x;
-        if (binary[idx] > 0) {
-          sumX += x;
-          sumY += y;
-          count++;
+        if (binary[idx] > 0 && !visited[idx]) {
+          const blob = floodFill(x, y);
+          if (blob && blob.pixelCount >= minArea && blob.pixelCount <= maxArea) {
+            // Calculate aspect ratio to filter cage structures
+            const bboxWidth = blob.maxX - blob.minX + 1;
+            const bboxHeight = blob.maxY - blob.minY + 1;
+            const aspectRatio = Math.max(bboxWidth, bboxHeight) / Math.min(bboxWidth, bboxHeight);
+
+            // Filter: mice are compact (aspect ratio < 5.5), cage walls are elongated
+            if (aspectRatio < 5.5) {
+              blobs.push(blob);
+            }
+          }
         }
       }
     }
 
-    if (count === 0) return null;
+    // Sort by pixel count descending
+    blobs.sort((a, b) => b.pixelCount - a.pixelCount);
+    return blobs;
+  }, []);
 
-    return {
-      x: sumX / count,
-      y: sumY / count,
-      pixelCount: count,
-    };
+  /**
+   * Select best mouse blob using temporal continuity and area matching
+   */
+  const selectMouseBlob = useCallback((
+    blobs: Blob[],
+    expectedArea: number,
+    prevPosition: { x: number; y: number } | null,
+    maxJumpDistance: number = 120
+  ): { x: number; y: number; pixelCount: number } | null => {
+    if (blobs.length === 0) return null;
+
+    // No previous position - select by area match
+    if (!prevPosition) {
+      let bestBlob = blobs[0];
+      let minDiff = Infinity;
+
+      for (const blob of blobs) {
+        const areaDiff = Math.abs(blob.pixelCount - expectedArea);
+        if (areaDiff < minDiff) {
+          minDiff = areaDiff;
+          bestBlob = blob;
+        }
+      }
+
+      return { x: bestBlob.x, y: bestBlob.y, pixelCount: bestBlob.pixelCount };
+    }
+
+    // Temporal tracking: score by distance + area
+    let bestBlob = blobs[0];
+    let bestScore = Infinity;
+    let foundWithinJumpDistance = false;
+
+    for (const blob of blobs) {
+      const dx = blob.x - prevPosition.x;
+      const dy = blob.y - prevPosition.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > maxJumpDistance) continue;
+
+      foundWithinJumpDistance = true;
+      const areaDiff = Math.abs(blob.pixelCount - expectedArea) / expectedArea;
+      const score = distance * 0.7 + areaDiff * 100 * 0.3;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestBlob = blob;
+      }
+    }
+
+    // If found within jump distance, return it
+    if (foundWithinJumpDistance) {
+      return { x: bestBlob.x, y: bestBlob.y, pixelCount: bestBlob.pixelCount };
+    }
+
+    // Fallback: Try relaxed distance (1.5x)
+    const relaxedMaxJump = maxJumpDistance * 1.5;
+    bestBlob = blobs[0];
+    bestScore = Infinity;
+
+    for (const blob of blobs) {
+      const dx = blob.x - prevPosition.x;
+      const dy = blob.y - prevPosition.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > relaxedMaxJump) continue;
+
+      const areaDiff = Math.abs(blob.pixelCount - expectedArea) / expectedArea;
+      const score = distance * 0.5 + areaDiff * 100 * 0.5;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestBlob = blob;
+      }
+    }
+
+    // Last resort: area-based selection
+    if (bestScore === Infinity) {
+      bestBlob = blobs[0];
+      let minDiff = Infinity;
+
+      for (const blob of blobs) {
+        const areaDiff = Math.abs(blob.pixelCount - expectedArea);
+        if (areaDiff < minDiff) {
+          minDiff = areaDiff;
+          bestBlob = blob;
+        }
+      }
+    }
+
+    return { x: bestBlob.x, y: bestBlob.y, pixelCount: bestBlob.pixelCount };
   }, []);
 
   /**
    * Process a single frame with background subtraction
+   * Enhanced with blob detection and temporal tracking
    */
+  const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
+  const expectedAreaRef = useRef<number>(50); // Initial expected area (in downscaled coords)
+
   const processFrame = useCallback(
     (timestamp: number, frameNumber: number): TrackingResult | null => {
       const video = videoRef.current;
@@ -317,13 +523,22 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
         binary = erode(diff, width, height);
       }
 
-      // Calculate center of mass (in downscaled coords)
-      const result = calculateCenterOfMass(binary, width, height);
-
-      // Scale minimum area threshold to match downscaled resolution
+      // Scale area thresholds to match downscaled resolution
       const scaledMinArea = trackingConfig.mouseMinArea / (scaleFactors.scaleX * scaleFactors.scaleY);
+      const scaledMaxArea = trackingConfig.mouseMaxArea / (scaleFactors.scaleX * scaleFactors.scaleY);
 
-      if (!result || result.pixelCount < scaledMinArea) {
+      // Find all blobs using connected component labeling
+      const blobs = findBlobs(binary, width, height, scaledMinArea, scaledMaxArea);
+
+      // Debug logging (throttled)
+      if (frameNumber % 30 === 0) {
+        console.log(`[Frame ${frameNumber}] Found ${blobs.length} blobs, minArea: ${scaledMinArea.toFixed(1)}, maxArea: ${scaledMaxArea.toFixed(1)}`);
+        if (blobs.length > 0) {
+          console.log(`  Top blob: area=${blobs[0].pixelCount.toFixed(0)}, pos=(${blobs[0].x.toFixed(0)},${blobs[0].y.toFixed(0)})`);
+        }
+      }
+
+      if (blobs.length === 0) {
         return {
           frameNumber,
           timestamp,
@@ -332,6 +547,31 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
           brightnessAverage: 0,
         };
       }
+
+      // Select best mouse blob using temporal continuity
+      const scaledExpectedArea = expectedAreaRef.current; // Already in downscaled coords
+      const scaledMaxJump = 120 / Math.max(scaleFactors.scaleX, scaleFactors.scaleY);
+
+      const result = selectMouseBlob(
+        blobs,
+        scaledExpectedArea,
+        lastMousePositionRef.current,
+        scaledMaxJump
+      );
+
+      if (!result) {
+        return {
+          frameNumber,
+          timestamp,
+          centerOfMass: null,
+          pixelCount: 0,
+          brightnessAverage: 0,
+        };
+      }
+
+      // Update temporal tracking state (keep in downscaled coords)
+      lastMousePositionRef.current = { x: result.x, y: result.y };
+      expectedAreaRef.current = result.pixelCount; // Already in downscaled resolution
 
       // COORDINATE REMAPPING: Scale up to original resolution
       const originalX = result.x * scaleFactors.scaleX;
@@ -346,7 +586,7 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
         brightnessAverage: 0,
       };
     },
-    [videoRef, trackingConfig, toGrayscale, erode, calculateCenterOfMass]
+    [videoRef, trackingConfig, toGrayscale, erode, findBlobs, selectMouseBlob]
   );
 
   /**
@@ -377,6 +617,14 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
     // Initialize tracking state
     startTracking();
     isTrackingRef.current = true;
+
+    // Reset temporal tracking state for new run
+    lastMousePositionRef.current = null;
+    // Set initial expected area to middle of min/max range (in downscaled coords)
+    const scaleFactors = scaleFactorsRef.current!;
+    const scaledMinArea = trackingConfig.mouseMinArea / (scaleFactors.scaleX * scaleFactors.scaleY);
+    const scaledMaxArea = trackingConfig.mouseMaxArea / (scaleFactors.scaleX * scaleFactors.scaleY);
+    expectedAreaRef.current = (scaledMinArea + scaledMaxArea) / 2;
 
     const { duration, fps } = metadata;
     const sampleStep = trackingConfig.sampleEveryNthFrame;

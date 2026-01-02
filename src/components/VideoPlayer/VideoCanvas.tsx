@@ -20,6 +20,7 @@ export function VideoCanvas() {
   const isTracking = useTrackingStore((state) => state.isTracking);
   const trackingProgress = useTrackingStore((state) => state.trackingProgress);
   const trackingMethod = useTrackingStore((state) => state.config.method);
+  const trackingResults = useTrackingStore((state) => state.results);
 
   // Use frame extractor hook
   useFrameExtractor({ videoRef, canvasRef });
@@ -102,8 +103,9 @@ export function VideoCanvas() {
 
         {/* Tracking overlay (drawn third, above calibration) */}
         <TrackingOverlay
-          width={metadata?.width || 800}
-          height={metadata?.height || 600}
+          results={trackingResults}
+          currentFrameIndex={Math.floor(playback.currentTime * (metadata?.fps || 30))}
+          videoRef={videoRef}
         />
 
         {/* Processing overlay (shown during tracking) */}

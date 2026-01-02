@@ -93,10 +93,11 @@ const DEFAULT_CONFIG: TrackingConfiguration = {
   knnConfidence: 0.6,
 
   // NEW: Mouse tracker defaults
-  mouseThreshold: 30,
+  mouseThreshold: 25,
   mouseMinArea: 100,
+  mouseMaxArea: 1500,
   mouseInvert: false,
-  mouseErosion: false,
+  mouseErosion: true,
 };
 
 export const useTrackingStore = create<TrackingStore>((set, get) => ({

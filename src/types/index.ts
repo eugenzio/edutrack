@@ -68,10 +68,11 @@ export interface TrackingConfiguration {
   knnConfidence: number;             // Minimum confidence for KNN prediction, default 0.6
 
   // NEW: Mouse tracker configuration (Background Subtraction)
-  mouseThreshold: number;            // Difference threshold for background subtraction, default 30
+  mouseThreshold: number;            // Difference threshold for background subtraction, default 25
   mouseMinArea: number;              // Minimum blob area in pixels to filter noise, default 100
+  mouseMaxArea: number;              // Maximum blob area in pixels to filter cage structures, default 1500
   mouseInvert: boolean;              // Invert mask for black mice on light background, default false
-  mouseErosion: boolean;             // Apply morphological erosion to remove tail, default false
+  mouseErosion: boolean;             // Apply morphological erosion to remove tail, default true
 }
 
 // Tracking state
