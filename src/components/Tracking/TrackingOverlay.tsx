@@ -1,6 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 import type { TrackingResult } from '../../types';
 
+// Skeleton colors for pose visualization
+const SKELETON_COLORS = {
+  snout: '#00FF00',      // Green - nose/snout
+  bodyCenter: '#0066FF', // Blue - body center
+  tailBase: '#FF0000',   // Red - tail base
+  connection: '#FFFFFF', // White - connecting lines
+};
+
 interface TrackingOverlayProps {
   results: TrackingResult[];
   currentFrameIndex: number;
@@ -16,15 +24,19 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
 }) => {
   const trajectoryCanvasRef = useRef<HTMLCanvasElement>(null);
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
+  const skeletonCanvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number>();
   const lastFrameIndexRef = useRef<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Check if we have pose data
+  const hasPoseData = results.some(r => r.pose !== undefined);
 
   // 1. 캔버스 크기 맞추기 (부모 컨테이너 크기에 맞춤)
   useEffect(() => {
     const updateCanvasSize = () => {
       const container = containerRef.current;
-      if (container && trajectoryCanvasRef.current && markerCanvasRef.current) {
+      if (container && trajectoryCanvasRef.current && markerCanvasRef.current && skeletonCanvasRef.current) {
         const rect = container.getBoundingClientRect();
         const displayWidth = rect.width;
         const displayHeight = rect.height;
@@ -33,6 +45,8 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
         trajectoryCanvasRef.current.height = displayHeight;
         markerCanvasRef.current.width = displayWidth;
         markerCanvasRef.current.height = displayHeight;
+        skeletonCanvasRef.current.width = displayWidth;
+        skeletonCanvasRef.current.height = displayHeight;
       }
     };
 
@@ -176,6 +190,102 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
     };
   }, [results, currentFrameIndex, videoWidth, videoHeight]);
 
+  // 4. Skeleton rendering for pose tracking
+  useEffect(() => {
+    if (!hasPoseData) return;
+
+    const canvas = skeletonCanvasRef.current;
+    if (!canvas || videoWidth === 0 || videoHeight === 0) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const scaleX = canvas.width / videoWidth;
+    const scaleY = canvas.height / videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Find current frame's pose data
+    const currentResult = results.find(r => r.frameNumber === currentFrameIndex);
+    const pose = currentResult?.pose;
+
+    if (!pose) return;
+
+    const { snout, bodyCenter, tailBase } = pose;
+
+    // Helper to scale point
+    const scalePoint = (p: { x: number; y: number } | null) => {
+      if (!p) return null;
+      return { x: p.x * scaleX, y: p.y * scaleY };
+    };
+
+    const scaledSnout = scalePoint(snout);
+    const scaledBody = scalePoint(bodyCenter);
+    const scaledTail = scalePoint(tailBase);
+
+    // Draw connecting lines (snout -> body -> tail)
+    ctx.strokeStyle = SKELETON_COLORS.connection;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+
+    if (scaledSnout && scaledBody) {
+      ctx.moveTo(scaledSnout.x, scaledSnout.y);
+      ctx.lineTo(scaledBody.x, scaledBody.y);
+    }
+    if (scaledBody && scaledTail) {
+      if (!scaledSnout) {
+        ctx.moveTo(scaledBody.x, scaledBody.y);
+      }
+      ctx.lineTo(scaledTail.x, scaledTail.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw keypoints
+    const drawKeypoint = (
+      point: { x: number; y: number } | null,
+      color: string,
+      label: string
+    ) => {
+      if (!point) return;
+
+      // Outer circle with glow
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner circle
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'white';
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Label
+      ctx.fillStyle = color;
+      ctx.font = 'bold 10px Arial';
+      ctx.fillText(label, point.x + 10, point.y - 8);
+    };
+
+    drawKeypoint(scaledSnout, SKELETON_COLORS.snout, 'Snout');
+    drawKeypoint(scaledBody, SKELETON_COLORS.bodyCenter, 'Body');
+    drawKeypoint(scaledTail, SKELETON_COLORS.tailBase, 'Tail');
+
+    // Show confidence if available
+    if (currentResult?.poseConfidence !== undefined) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.font = '11px Arial';
+      ctx.fillText(
+        `Pose: ${(currentResult.poseConfidence * 100).toFixed(0)}%`,
+        10,
+        canvas.height - 10
+      );
+    }
+  }, [results, currentFrameIndex, videoWidth, videoHeight, hasPoseData]);
+
   return (
     <div
       ref={containerRef}
@@ -210,6 +320,19 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
           height: '100%',
           pointerEvents: 'none',
           zIndex: 1
+        }}
+      />
+      {/* Skeleton canvas for pose visualization */}
+      <canvas
+        ref={skeletonCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 2
         }}
       />
     </div>

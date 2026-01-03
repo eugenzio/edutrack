@@ -36,11 +36,17 @@ interface TrackingStore extends TrackingState {
   } | null;
   isLivePreview: boolean;
 
-  // NEW: KNN training state
+  // KNN training state
   isTrainingMode: boolean;
   targetSamples: number;
   backgroundSamples: number;
   knnReady: boolean;
+
+  // MoveNet pose model state
+  isPoseModelLoading: boolean;
+  isPoseModelReady: boolean;
+  poseModelError: string | null;
+  poseBackend: string | null;
 
   // NEW: AI-specific actions
   setModelLoading: (loading: boolean) => void;
@@ -68,6 +74,13 @@ interface TrackingStore extends TrackingState {
   setKnnReady: (ready: boolean) => void;
   resetKnnTraining: () => void;
 
+  // MoveNet pose model actions
+  setPoseModelLoading: (loading: boolean) => void;
+  setPoseModelReady: (ready: boolean) => void;
+  setPoseModelError: (error: string | null) => void;
+  setPoseBackend: (backend: string | null) => void;
+  resetPoseModel: () => void;
+
   // Computed getters
   getTrackingMetrics: () => TrackingMetrics;
   isTrackingComplete: () => boolean;
@@ -92,12 +105,18 @@ const DEFAULT_CONFIG: TrackingConfiguration = {
   knnSearchRadius: 100,
   knnConfidence: 0.6,
 
-  // NEW: Mouse tracker defaults
+  // Mouse tracker defaults
   mouseThreshold: 25,
   mouseMinArea: 100,
   mouseMaxArea: 1500,
   mouseInvert: false,
   mouseErosion: true,
+
+  // MoveNet pose defaults
+  poseModelType: 'lightning',
+  poseMinConfidence: 0.3,
+  poseKeypointConfidence: 0.3,
+  poseSmoothing: true,
 };
 
 export const useTrackingStore = create<TrackingStore>((set, get) => ({
@@ -124,11 +143,17 @@ export const useTrackingStore = create<TrackingStore>((set, get) => ({
   lastScanSummary: null,
   isLivePreview: false,
 
-  // NEW: KNN training initial state
+  // KNN training initial state
   isTrainingMode: false,
   targetSamples: 0,
   backgroundSamples: 0,
   knnReady: false,
+
+  // MoveNet pose model initial state
+  isPoseModelLoading: false,
+  isPoseModelReady: false,
+  poseModelError: null,
+  poseBackend: null,
 
   // Actions
   startTracking: () => {
@@ -263,6 +288,32 @@ export const useTrackingStore = create<TrackingStore>((set, get) => ({
       backgroundSamples: 0,
       knnReady: false,
       isTrainingMode: false,
+    });
+  },
+
+  // MoveNet pose model actions
+  setPoseModelLoading: (loading: boolean) => {
+    set({ isPoseModelLoading: loading });
+  },
+
+  setPoseModelReady: (ready: boolean) => {
+    set({ isPoseModelReady: ready, isPoseModelLoading: false });
+  },
+
+  setPoseModelError: (error: string | null) => {
+    set({ poseModelError: error, isPoseModelLoading: false });
+  },
+
+  setPoseBackend: (backend: string | null) => {
+    set({ poseBackend: backend });
+  },
+
+  resetPoseModel: () => {
+    set({
+      isPoseModelLoading: false,
+      isPoseModelReady: false,
+      poseModelError: null,
+      poseBackend: null,
     });
   },
 

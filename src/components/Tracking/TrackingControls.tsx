@@ -1,6 +1,7 @@
 import { useTrackingStore } from '../../stores/trackingSlice';
 import { useColorTracker } from '../../hooks/useColorTracker';
 import { useMouseTracker } from '../../hooks/useMouseTracker';
+import { usePoseTracker } from '../../hooks/usePoseTracker';
 import { useVideoStore } from '../../stores/trackingStore';
 import { useVideoRefs } from '../../contexts/VideoRefsContext';
 
@@ -22,6 +23,7 @@ export function TrackingControls() {
   // IMPORTANT: Always call all hooks unconditionally (React Hooks rule)
   const brightnessTracker = useColorTracker({ videoRef, canvasRef });
   const mouseTracker = useMouseTracker({ videoRef, canvasRef });
+  const poseTracker = usePoseTracker({ videoRef, canvasRef });
 
   if (!isVideoLoaded) return null;
 
@@ -39,6 +41,9 @@ export function TrackingControls() {
     if (config.method === 'mouse-tracker') {
       console.log('[TrackingControls] Running mouse tracker...');
       mouseTracker.runTracking();
+    } else if (config.method === 'movenet-pose') {
+      console.log('[TrackingControls] Running MoveNet pose tracker...');
+      poseTracker.runTracking();
     } else {
       console.log('[TrackingControls] Running brightness tracking...');
       brightnessTracker.runTracking();
@@ -50,6 +55,8 @@ export function TrackingControls() {
 
     if (config.method === 'mouse-tracker') {
       mouseTracker.cancelTracking();
+    } else if (config.method === 'movenet-pose') {
+      poseTracker.cancelTracking();
     } else {
       brightnessTracker.cancelTracking();
     }
@@ -57,7 +64,8 @@ export function TrackingControls() {
 
   const isStartDisabled =
     isTracking ||
-    (config.method === 'mouse-tracker' && !mouseTracker.hasBackground);
+    (config.method === 'mouse-tracker' && !mouseTracker.hasBackground) ||
+    (config.method === 'movenet-pose' && !poseTracker.isModelReady);
 
   return (
     <div className="border border-gray-300 bg-white">
@@ -77,7 +85,18 @@ export function TrackingControls() {
                 : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
             }`}
           >
-            Background Subtraction
+            Bkg Subtract
+          </button>
+          <button
+            onClick={() => updateConfig({ method: 'movenet-pose' })}
+            disabled={isTracking}
+            className={`flex-1 px-2 py-1 text-xs ${
+              config.method === 'movenet-pose'
+                ? 'bg-gray-700 text-white border border-gray-600'
+                : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
+            }`}
+          >
+            MoveNet Pose
           </button>
           <button
             onClick={() => updateConfig({ method: 'brightness' })}
@@ -88,7 +107,7 @@ export function TrackingControls() {
                 : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
             }`}
           >
-            Brightness (Legacy)
+            Brightness
           </button>
         </div>
 
@@ -225,6 +244,153 @@ export function TrackingControls() {
           </>
         )}
 
+        {/* MoveNet Pose Panel */}
+        {config.method === 'movenet-pose' && (
+          <>
+            {/* Instructions */}
+            <div className="text-xs bg-purple-50 border border-purple-600 p-1.5">
+              <p className="font-semibold text-purple-900 mb-1">MoveNet Pose Tracking:</p>
+              <ol className="list-decimal list-inside space-y-0.5 text-purple-800">
+                <li>Click "Load Model" to initialize TensorFlow.js</li>
+                <li>Adjust confidence thresholds if needed</li>
+                <li>Click "Start Tracking" to analyze the video</li>
+              </ol>
+            </div>
+
+            {/* Model Loading */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-gray-700">
+                  1. Load Pose Model
+                </label>
+                {poseTracker.isModelReady && (
+                  <span className="text-xs text-green-700 font-semibold">
+                    ✓ Ready ({poseTracker.backend})
+                  </span>
+                )}
+              </div>
+
+              <div className="flex gap-1">
+                <button
+                  onClick={poseTracker.loadModel}
+                  disabled={isTracking || poseTracker.isModelLoading || poseTracker.isModelReady}
+                  className="flex-1 px-2 py-1 border border-purple-700 bg-purple-600 hover:bg-purple-500 text-white text-xs disabled:opacity-50"
+                >
+                  {poseTracker.isModelLoading
+                    ? 'Loading...'
+                    : poseTracker.isModelReady
+                    ? 'Model Loaded'
+                    : 'Load Model'}
+                </button>
+                {poseTracker.isModelReady && (
+                  <button
+                    onClick={poseTracker.unloadModel}
+                    disabled={isTracking}
+                    className="px-2 py-1 border border-red-700 bg-red-600 hover:bg-red-500 text-white text-xs disabled:opacity-50"
+                  >
+                    Unload
+                  </button>
+                )}
+              </div>
+
+              {poseTracker.modelError && (
+                <div className="text-xs text-red-800 bg-red-50 border border-red-400 p-1">
+                  {poseTracker.modelError}
+                </div>
+              )}
+            </div>
+
+            {/* Model Type Selector */}
+            <div className="space-y-1">
+              <label className="text-xs text-gray-600">2. Model Type</label>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => updateConfig({ poseModelType: 'lightning' })}
+                  disabled={isTracking || poseTracker.isModelReady}
+                  className={`flex-1 px-2 py-1 text-xs ${
+                    config.poseModelType === 'lightning'
+                      ? 'bg-purple-600 text-white border border-purple-500'
+                      : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
+                  } disabled:opacity-50`}
+                >
+                  Lightning (Fast)
+                </button>
+                <button
+                  onClick={() => updateConfig({ poseModelType: 'thunder' })}
+                  disabled={isTracking || poseTracker.isModelReady}
+                  className={`flex-1 px-2 py-1 text-xs ${
+                    config.poseModelType === 'thunder'
+                      ? 'bg-purple-600 text-white border border-purple-500'
+                      : 'bg-gray-100 text-gray-800 border border-gray-400 hover:bg-gray-200'
+                  } disabled:opacity-50`}
+                >
+                  Thunder (Accurate)
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">
+                Lightning: ~30fps. Thunder: ~15fps but more accurate.
+              </p>
+            </div>
+
+            {/* Confidence Threshold */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <label className="text-xs text-gray-600">3. Min Pose Confidence</label>
+                <span className="text-xs font-mono text-gray-800">
+                  {config.poseMinConfidence.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="0.9"
+                step="0.05"
+                value={config.poseMinConfidence}
+                onChange={(e) => updateConfig({ poseMinConfidence: Number(e.target.value) })}
+                disabled={isTracking}
+                className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
+              />
+            </div>
+
+            {/* Keypoint Confidence */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <label className="text-xs text-gray-600">4. Min Keypoint Confidence</label>
+                <span className="text-xs font-mono text-gray-800">
+                  {config.poseKeypointConfidence.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="0.9"
+                step="0.05"
+                value={config.poseKeypointConfidence}
+                onChange={(e) => updateConfig({ poseKeypointConfidence: Number(e.target.value) })}
+                disabled={isTracking}
+                className="w-full h-1 bg-gray-300 appearance-none cursor-pointer disabled:opacity-50"
+              />
+            </div>
+
+            {/* Smoothing Toggle */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={config.poseSmoothing}
+                  onChange={(e) => updateConfig({ poseSmoothing: e.target.checked })}
+                  disabled={isTracking}
+                  className="w-3 h-3 disabled:opacity-50"
+                />
+                <span className="flex-1">Temporal Smoothing</span>
+              </label>
+              <p className="text-xs text-gray-500 ml-5">
+                Reduces jitter by smoothing keypoint positions across frames.
+              </p>
+            </div>
+          </>
+        )}
+
         {/* Brightness Panel (Legacy) */}
         {config.method === 'brightness' && (
           <>
@@ -305,6 +471,8 @@ export function TrackingControls() {
             >
               {config.method === 'mouse-tracker' && !mouseTracker.hasBackground
                 ? 'Capture Background First'
+                : config.method === 'movenet-pose' && !poseTracker.isModelReady
+                ? 'Load Model First'
                 : 'Start Tracking'}
             </button>
           ) : (

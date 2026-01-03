@@ -5,6 +5,13 @@ export interface Point {
   timestamp: number;
 }
 
+// Mouse pose keypoints (mapped from MoveNet human pose)
+export interface MousePose {
+  snout: Point | null;      // MoveNet nose → rodent snout
+  bodyCenter: Point | null; // MoveNet shoulders midpoint → body center
+  tailBase: Point | null;   // MoveNet hips midpoint → tail base
+}
+
 // Video metadata
 export interface VideoMetadata {
   filename: string;
@@ -39,10 +46,14 @@ export interface TrackingResult {
   pixelCount: number;
   brightnessAverage: number;
 
-  // NEW: Optional AI fields (only present when method === 'ai-object')
+  // Optional AI fields (only present when method === 'ai-object')
   aiBBox?: BBox;
   aiClass?: string;
   aiScore?: number;
+
+  // Optional pose fields (only present when method === 'movenet-pose')
+  pose?: MousePose;
+  poseConfidence?: number;
 }
 
 // Tracking configuration
@@ -67,12 +78,18 @@ export interface TrackingConfiguration {
   knnSearchRadius: number;           // Search radius around last position, default 100
   knnConfidence: number;             // Minimum confidence for KNN prediction, default 0.6
 
-  // NEW: Mouse tracker configuration (Background Subtraction)
+  // Mouse tracker configuration (Background Subtraction)
   mouseThreshold: number;            // Difference threshold for background subtraction, default 25
   mouseMinArea: number;              // Minimum blob area in pixels to filter noise, default 100
   mouseMaxArea: number;              // Maximum blob area in pixels to filter cage structures, default 1500
   mouseInvert: boolean;              // Invert mask for black mice on light background, default false
   mouseErosion: boolean;             // Apply morphological erosion to remove tail, default true
+
+  // MoveNet pose tracking configuration
+  poseModelType: 'lightning' | 'thunder'; // Model type, default 'lightning'
+  poseMinConfidence: number;              // Min overall pose confidence, default 0.3
+  poseKeypointConfidence: number;         // Min keypoint confidence, default 0.3
+  poseSmoothing: boolean;                 // Enable temporal smoothing, default true
 }
 
 // Tracking state
@@ -169,8 +186,8 @@ export interface CalibrationState {
   drawingStart: Point | null;
 }
 
-// AI Tracking types (Phase 5)
-export type TrackingMethod = 'ai-object' | 'brightness' | 'knn-custom' | 'mouse-tracker';
+// Tracking method types
+export type TrackingMethod = 'ai-object' | 'brightness' | 'knn-custom' | 'mouse-tracker' | 'movenet-pose';
 
 export interface BBox {
   x: number;      // top-left x coordinate
