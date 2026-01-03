@@ -41,6 +41,9 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
   const scaleFactorsRef = useRef<{ scaleX: number; scaleY: number } | null>(null);
   const lastProgressUpdateRef = useRef<number>(0);
   const lastLogTimeRef = useRef<number>(0);
+  const originalPlaybackRateRef = useRef<number>(1);
+  const endedHandlerRef = useRef<(() => void) | null>(null);
+  const errorHandlerRef = useRef<((event: Event) => void) | null>(null);
 
   /**
    * Initialize temporary canvas for processing
@@ -163,12 +166,36 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
       video.currentTime = sampleTimes[i];
 
       // Wait for seek to complete
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
+        // If already at target time and ready, resolve immediately
+        if (video.currentTime === 0 && video.readyState >= 3) {
+          resolve();
+          return;
+        }
+
         const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
+          cleanup();
           resolve();
         };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error('Seek failed'));
+        };
+
+        const timeoutId = window.setTimeout(() => {
+          cleanup();
+          reject(new Error('Seek timeout'));
+        }, 5000);
+
+        const cleanup = () => {
+          video.removeEventListener('seeked', onSeeked);
+          video.removeEventListener('error', onError);
+          clearTimeout(timeoutId);
+        };
+
         video.addEventListener('seeked', onSeeked, { once: true });
+        video.addEventListener('error', onError, { once: true });
       });
 
       // Draw downscaled frame
@@ -621,7 +648,15 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
     // Reset temporal tracking state for new run
     lastMousePositionRef.current = null;
     // Set initial expected area to middle of min/max range (in downscaled coords)
-    const scaleFactors = scaleFactorsRef.current!;
+    const scaleFactors = scaleFactorsRef.current;
+    if (!scaleFactors) {
+      const errorMsg = 'Processing scale factors not ready';
+      console.error('[Mouse Tracker]', errorMsg);
+      setTrackingError(errorMsg);
+      stopTracking();
+      isTrackingRef.current = false;
+      return;
+    }
     const scaledMinArea = trackingConfig.mouseMinArea / (scaleFactors.scaleX * scaleFactors.scaleY);
     const scaledMaxArea = trackingConfig.mouseMaxArea / (scaleFactors.scaleX * scaleFactors.scaleY);
     expectedAreaRef.current = (scaledMinArea + scaledMaxArea) / 2;
@@ -630,12 +665,76 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
     const sampleStep = trackingConfig.sampleEveryNthFrame;
     const totalFrames = Math.floor(duration * fps);
     const results: TrackingResult[] = [];
+    const nearEndThreshold = Math.max(1 / fps, (sampleStep / fps) * 1.5);
 
     let frameCount = 0;
     let lastProcessedFrame = -sampleStep;
 
-    // Save original playback rate
-    const originalRate = video.playbackRate;
+    // Save original playback rate for later restore
+    originalPlaybackRateRef.current = video.playbackRate;
+
+    let trackingFinished = false;
+
+    const cancelFrameCallback = () => {
+      if (
+        frameCallbackIdRef.current !== null &&
+        'cancelVideoFrameCallback' in video
+      ) {
+        (video as any).cancelVideoFrameCallback(frameCallbackIdRef.current);
+        frameCallbackIdRef.current = null;
+      }
+    };
+
+    const finishTracking = () => {
+      if (trackingFinished) return;
+      trackingFinished = true;
+      const endedHandler = endedHandlerRef.current;
+      if (endedHandler) {
+        video.removeEventListener('ended', endedHandler);
+        endedHandlerRef.current = null;
+      }
+      const errorHandler = errorHandlerRef.current;
+      if (errorHandler) {
+        video.removeEventListener('error', errorHandler);
+        errorHandlerRef.current = null;
+      }
+      cancelFrameCallback();
+      video.pause();
+      video.playbackRate = originalPlaybackRateRef.current;
+      setTrackingResults(results);
+      setTrackingProgress(100);
+      stopTracking();
+      isTrackingRef.current = false;
+      console.log('[Mouse Tracker] Tracking completed');
+    };
+
+    const failTracking = (message: string, err?: unknown) => {
+      if (trackingFinished) return;
+      trackingFinished = true;
+      console.error('[Mouse Tracker] Tracking failed:', err ?? message);
+      const endedHandler = endedHandlerRef.current;
+      if (endedHandler) {
+        video.removeEventListener('ended', endedHandler);
+        endedHandlerRef.current = null;
+      }
+      const errorHandler = errorHandlerRef.current;
+      if (errorHandler) {
+        video.removeEventListener('error', errorHandler);
+        errorHandlerRef.current = null;
+      }
+      cancelFrameCallback();
+      video.pause();
+      video.playbackRate = originalPlaybackRateRef.current;
+      setTrackingError(message);
+      stopTracking();
+      isTrackingRef.current = false;
+    };
+
+    const handlePlaybackError = (event: Event) => {
+      failTracking('Video playback error', event);
+    };
+    endedHandlerRef.current = finishTracking;
+    errorHandlerRef.current = handlePlaybackError;
 
     try {
       // Set playback rate for analysis
@@ -645,79 +744,107 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
       video.currentTime = 0;
 
       // Wait for seek to complete
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
+        // If already at target time and ready, resolve immediately
+        if (video.currentTime === 0 && video.readyState >= 3) {
+          resolve();
+          return;
+        }
+
         const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
+          cleanup();
           resolve();
         };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error('Seek failed'));
+        };
+
+        const timeoutId = window.setTimeout(() => {
+          cleanup();
+          reject(new Error('Seek timeout'));
+        }, 5000);
+
+        const cleanup = () => {
+          video.removeEventListener('seeked', onSeeked);
+          video.removeEventListener('error', onError);
+          clearTimeout(timeoutId);
+        };
+
         video.addEventListener('seeked', onSeeked, { once: true });
+        video.addEventListener('error', onError, { once: true });
       });
 
       // Start playback
       await video.play();
 
+      // Ensure we finalize even if no further frames arrive at the very end
+      video.addEventListener('ended', finishTracking);
+      video.addEventListener('error', handlePlaybackError);
+
       // rVFC frame processor
       const processVideoFrame = async () => {
-        // Check if tracking was cancelled
-        if (!isTrackingRef.current) {
-          console.log('[Mouse Tracker] Tracking cancelled');
-          video.pause();
-          return;
-        }
-
-        // Check if we've reached the end
-        if (video.currentTime >= duration || video.ended) {
-          console.log('[Mouse Tracker] Reached end of video');
-          video.pause();
-          setTrackingResults(results);
-          setTrackingProgress(100);
-          stopTracking();
-          isTrackingRef.current = false;
-          return;
-        }
-
-        frameCount++;
-
-        // Sample every Nth frame
-        if (frameCount - lastProcessedFrame >= sampleStep) {
-          lastProcessedFrame = frameCount;
-
-          const timestamp = video.currentTime;
-          const frameNumber = Math.floor(timestamp * fps);
-
-          // Process frame (FAST - no async AI inference)
-          const result = processFrame(timestamp, frameNumber);
-          if (result) {
-            results.push(result);
+        try {
+          // Check if tracking was cancelled
+          if (!isTrackingRef.current) {
+            console.log('[Mouse Tracker] Tracking cancelled');
+            video.pause();
+            return;
           }
 
-          // THROTTLED progress and logging
-          const progress = (timestamp / duration) * 100;
-          const now = performance.now();
-
-          // Update progress at most every 200ms
-          if (now - lastProgressUpdateRef.current >= PROGRESS_THROTTLE_MS) {
-            setTrackingProgress(progress);
-            lastProgressUpdateRef.current = now;
+          // Check if we've reached the end (or extremely close)
+          if (
+            video.currentTime >= duration ||
+            video.ended ||
+            duration - video.currentTime <= nearEndThreshold
+          ) {
+            finishTracking();
+            return;
           }
 
-          // Log at most every 500ms
-          if (now - lastLogTimeRef.current >= LOG_THROTTLE_MS) {
-            console.log(`[Mouse Tracker] Processed frame ${frameNumber}/${totalFrames} (${progress.toFixed(1)}%)`);
-            lastLogTimeRef.current = now;
-          }
-        }
+          frameCount++;
 
-        // Continue to next frame if still tracking
-        if (isTrackingRef.current && !video.ended) {
-          frameCallbackIdRef.current = (video as any).requestVideoFrameCallback(processVideoFrame);
-        } else {
-          // Tracking completed
-          video.pause();
-          setTrackingResults(results);
-          setTrackingProgress(100);
-          stopTracking();
-          isTrackingRef.current = false;
+          // Sample every Nth frame
+          if (frameCount - lastProcessedFrame >= sampleStep) {
+            lastProcessedFrame = frameCount;
+
+            const timestamp = video.currentTime;
+            const frameNumber = Math.floor(timestamp * fps);
+
+            // Process frame (FAST - no async AI inference)
+            const result = processFrame(timestamp, frameNumber);
+            if (result) {
+              results.push(result);
+            }
+
+            // THROTTLED progress and logging
+            const progress = (timestamp / duration) * 100;
+            const now = performance.now();
+
+            // Update progress AND results at most every 200ms (real-time visualization)
+            if (now - lastProgressUpdateRef.current >= PROGRESS_THROTTLE_MS) {
+              setTrackingProgress(progress);
+              setTrackingResults([...results]);  // Real-time update for TrackingOverlay
+              lastProgressUpdateRef.current = now;
+            }
+
+            // Log at most every 500ms
+            if (now - lastLogTimeRef.current >= LOG_THROTTLE_MS) {
+              console.log(`[Mouse Tracker] Processed frame ${frameNumber}/${totalFrames} (${progress.toFixed(1)}%)`);
+              lastLogTimeRef.current = now;
+            }
+          }
+
+          // Continue to next frame if still tracking
+          if (isTrackingRef.current && !video.ended) {
+            frameCallbackIdRef.current = (video as any).requestVideoFrameCallback(processVideoFrame);
+          } else if (isTrackingRef.current) {
+            finishTracking();
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown processing error';
+          failTracking(message, err);
         }
       };
 
@@ -725,14 +852,13 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
       frameCallbackIdRef.current = (video as any).requestVideoFrameCallback(processVideoFrame);
 
     } catch (error) {
-      console.error('[Mouse Tracker] Tracking error:', error);
-      setTrackingError(error instanceof Error ? error.message : 'Unknown error');
-      video.pause();
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      failTracking(message, error);
     } finally {
-      // Restore original playback rate
-      video.playbackRate = originalRate;
-      isTrackingRef.current = false;
-      frameCallbackIdRef.current = null;
+      // Restore playback rate if we failed before finishing
+      if (!trackingFinished) {
+        video.playbackRate = originalPlaybackRateRef.current;
+      }
     }
   }, [
     videoRef,
@@ -759,6 +885,20 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
       (video as any).cancelVideoFrameCallback(frameCallbackIdRef.current);
       frameCallbackIdRef.current = null;
     }
+    if (video) {
+      const endedHandler = endedHandlerRef.current;
+      if (endedHandler) {
+        video.removeEventListener('ended', endedHandler);
+        endedHandlerRef.current = null;
+      }
+      const errorHandler = errorHandlerRef.current;
+      if (errorHandler) {
+        video.removeEventListener('error', errorHandler);
+        errorHandlerRef.current = null;
+      }
+      video.pause();
+      video.playbackRate = originalPlaybackRateRef.current;
+    }
 
     stopTracking();
   }, [videoRef, stopTracking]);
@@ -775,6 +915,19 @@ export function useMouseTracker({ videoRef }: UseMouseTrackerProps) {
           (video as any).cancelVideoFrameCallback(frameCallbackIdRef.current);
         }
       }
+      const video = videoRef.current;
+      if (video) {
+        const endedHandler = endedHandlerRef.current;
+        if (endedHandler) {
+          video.removeEventListener('ended', endedHandler);
+        }
+        const errorHandler = errorHandlerRef.current;
+        if (errorHandler) {
+          video.removeEventListener('error', errorHandler);
+        }
+      }
+      endedHandlerRef.current = null;
+      errorHandlerRef.current = null;
 
       // Clean up processing refs
       processingCanvasRef.current = null;

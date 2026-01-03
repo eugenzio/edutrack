@@ -105,7 +105,8 @@ export function VideoCanvas() {
         <TrackingOverlay
           results={trackingResults}
           currentFrameIndex={Math.floor(playback.currentTime * (metadata?.fps || 30))}
-          videoRef={videoRef}
+          videoWidth={metadata?.width || 800}
+          videoHeight={metadata?.height || 600}
         />
 
         {/* Processing overlay (shown during tracking) */}

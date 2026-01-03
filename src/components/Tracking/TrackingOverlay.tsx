@@ -4,48 +4,57 @@ import type { TrackingResult } from '../../types';
 interface TrackingOverlayProps {
   results: TrackingResult[];
   currentFrameIndex: number;
-  videoRef: React.RefObject<HTMLVideoElement>;
+  videoWidth: number;   // Original video resolution
+  videoHeight: number;  // Original video resolution
 }
 
 export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
   results,
   currentFrameIndex,
-  videoRef
+  videoWidth,
+  videoHeight
 }) => {
   const trajectoryCanvasRef = useRef<HTMLCanvasElement>(null);
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number>();
   const lastFrameIndexRef = useRef<number>(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // 1. 캔버스 크기 맞추기
+  // 1. 캔버스 크기 맞추기 (부모 컨테이너 크기에 맞춤)
   useEffect(() => {
     const updateCanvasSize = () => {
-      if (videoRef.current && trajectoryCanvasRef.current && markerCanvasRef.current) {
-        const videoWidth = videoRef.current.clientWidth;
-        const videoHeight = videoRef.current.clientHeight;
-        
-        trajectoryCanvasRef.current.width = videoWidth;
-        trajectoryCanvasRef.current.height = videoHeight;
-        markerCanvasRef.current.width = videoWidth;
-        markerCanvasRef.current.height = videoHeight;
+      const container = containerRef.current;
+      if (container && trajectoryCanvasRef.current && markerCanvasRef.current) {
+        const rect = container.getBoundingClientRect();
+        const displayWidth = rect.width;
+        const displayHeight = rect.height;
+
+        trajectoryCanvasRef.current.width = displayWidth;
+        trajectoryCanvasRef.current.height = displayHeight;
+        markerCanvasRef.current.width = displayWidth;
+        markerCanvasRef.current.height = displayHeight;
       }
     };
 
     updateCanvasSize();
     window.addEventListener('resize', updateCanvasSize);
     return () => window.removeEventListener('resize', updateCanvasSize);
-  }, [videoRef]);
+  }, []);
 
   // 2. 궤적 그리기 (빨간 선)
   useEffect(() => {
     const canvas = trajectoryCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas || videoWidth === 0 || videoHeight === 0) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     // 프레임이 바뀌었을 때만 다시 그리기
     if (currentFrameIndex === lastFrameIndexRef.current) return;
     lastFrameIndexRef.current = currentFrameIndex;
+
+    // 좌표 스케일링: 원본 비디오 해상도 → 캔버스 크기
+    const scaleX = canvas.width / videoWidth;
+    const scaleY = canvas.height / videoHeight;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
@@ -66,11 +75,12 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
       if (result.frameNumber > currentFrameIndex) break;
 
       if (result.centerOfMass) {
-        const x = result.centerOfMass.x;
-        const y = result.centerOfMass.y;
+        // 원본 좌표를 캔버스 좌표로 스케일링
+        const x = result.centerOfMass.x * scaleX;
+        const y = result.centerOfMass.y * scaleY;
 
         // [필터 1] 유효하지 않은 점 (0,0) 스킵
-        if (x === 0 && y === 0) {
+        if (result.centerOfMass.x === 0 && result.centerOfMass.y === 0) {
           hasStarted = false;
           continue;
         }
@@ -88,10 +98,11 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
           continue;
         }
 
-        // [필터 4] 점프가 너무 크면(200px) 선을 잇지 않음 (순간이동 방지)
+        // [필터 4] 점프가 너무 크면(스케일된 200px) 선을 잇지 않음 (순간이동 방지)
+        const scaledJumpThreshold = 200 * Math.min(scaleX, scaleY);
         if (hasStarted) {
           const dist = Math.sqrt(Math.pow(x - lastX, 2) + Math.pow(y - lastY, 2));
-          if (dist > 200) {
+          if (dist > scaledJumpThreshold) {
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(x, y);
@@ -115,15 +126,19 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
     }
     ctx.stroke();
 
-  }, [results, currentFrameIndex]);
+  }, [results, currentFrameIndex, videoWidth, videoHeight]);
 
   // 3. 현재 위치 표시 (빨간 점) - 부드러운 애니메이션
   useEffect(() => {
     const animate = () => {
       const canvas = markerCanvasRef.current;
-      if (!canvas) return;
+      if (!canvas || videoWidth === 0 || videoHeight === 0) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+
+      // 좌표 스케일링: 원본 비디오 해상도 → 캔버스 크기
+      const scaleX = canvas.width / videoWidth;
+      const scaleY = canvas.height / videoHeight;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -131,22 +146,24 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
       const currentResult = results.find(r => r.frameNumber === currentFrameIndex);
 
       if (currentResult?.centerOfMass) {
-        const { x, y } = currentResult.centerOfMass;
-        
+        // 원본 좌표를 캔버스 좌표로 스케일링
+        const x = currentResult.centerOfMass.x * scaleX;
+        const y = currentResult.centerOfMass.y * scaleY;
+
         // 가장자리 필터 통과한 경우에만 점 찍기
         const edgeMargin = Math.min(canvas.width, canvas.height) * 0.02;
-        if (x >= edgeMargin && x <= canvas.width - edgeMargin && 
+        if (x >= edgeMargin && x <= canvas.width - edgeMargin &&
             y >= edgeMargin && y <= canvas.height - edgeMargin) {
-          
+
           ctx.fillStyle = 'red';
           ctx.beginPath();
           ctx.arc(x, y, 5, 0, Math.PI * 2);
           ctx.fill();
 
-          // 좌표 텍스트
+          // 좌표 텍스트 (원본 좌표 표시)
           ctx.fillStyle = 'white';
           ctx.font = '12px Arial';
-          ctx.fillText(`(${Math.round(x)}, ${Math.round(y)})`, x + 10, y - 10);
+          ctx.fillText(`(${Math.round(currentResult.centerOfMass.x)}, ${Math.round(currentResult.centerOfMass.y)})`, x + 10, y - 10);
         }
       }
 
@@ -157,10 +174,21 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [results, currentFrameIndex]);
+  }, [results, currentFrameIndex, videoWidth, videoHeight]);
 
   return (
-    <>
+    <div
+      ref={containerRef}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 10
+      }}
+    >
       <canvas
         ref={trajectoryCanvasRef}
         style={{
@@ -169,8 +197,7 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
           left: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'none',
-          zIndex: 10
+          pointerEvents: 'none'
         }}
       />
       <canvas
@@ -182,9 +209,9 @@ export const TrackingOverlay: React.FC<TrackingOverlayProps> = ({
           width: '100%',
           height: '100%',
           pointerEvents: 'none',
-          zIndex: 11
+          zIndex: 1
         }}
       />
-    </>
+    </div>
   );
 };
